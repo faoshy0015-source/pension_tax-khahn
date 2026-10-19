@@ -12,164 +12,201 @@ st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout=
 # alone still provides readable colors. .streamlit/config.toml supplies a matching
 # native Streamlit dark theme (including dataframe/editor internals and popovers).
 st.markdown('''<style>
+/* HanaV Pension Tax Lab v3: high contrast across native widgets. */
 :root {
-    --hv-bg: #0B1420;
-    --hv-side: #101F2C;
-    --hv-panel: #172A3A;
-    --hv-input: #203348;
-    --hv-border: #456074;
-    --hv-text: #F5FAFF;
-    --hv-soft: #D2E0EC;
-    --hv-muted: #B9CFDD;
-    --hv-green: #53E3B0;
-    --hv-green-dark: #007A5A;
+  --hv-bg:#0B1521; --hv-side:#102333; --hv-card:#172B3A;
+  --hv-field:#213C50; --hv-field-border:#6A8BA0;
+  --hv-line:#416073; --hv-text:#FFFFFF; --hv-soft:#E3EDF4;
+  --hv-muted:#BED2DF; --hv-green:#48E4AD; --hv-green-dark:#007C61;
 }
-/* APP + TYPOGRAPHY: avoid almost-black labels on dark backgrounds */
-.stApp, [data-testid="stAppViewContainer"],
-[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
-    background-color: var(--hv-bg);
-    color: var(--hv-text);
+.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{
+  background:var(--hv-bg)!important; color:var(--hv-text)!important;
 }
-[data-testid="stHeader"] { background-color: rgba(11, 20, 32, .95); }
-[data-testid="stSidebar"], [data-testid="stSidebarContent"] {
-    background-color: var(--hv-side) !important;
+[data-testid="stHeader"]{background:rgba(11,21,33,.94)!important}
+[data-testid="stSidebar"],[data-testid="stSidebarContent"]{
+  background:var(--hv-side)!important; color:var(--hv-text)!important;
 }
-.stApp h1, .stApp h2, .stApp h3,
-.stApp h4, .stApp h5, .stApp h6 { color: var(--hv-text) !important; }
-.stApp h1 { letter-spacing: -.035em; font-weight: 800; }
-.stApp h2, .stApp h3 { margin-top: .5rem; }
-.stApp p, .stApp li, .stApp span,
-[data-testid="stMarkdownContainer"] { color: inherit; }
-[data-testid="stCaptionContainer"],
-[data-testid="stCaptionContainer"] p,
+.stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp h5,.stApp h6{
+  color:var(--hv-text)!important;
+}
+.stApp h1{font-size:2.15rem;font-weight:850;letter-spacing:-.04em;margin-bottom:.55rem}
+.stApp h3{font-weight:800;letter-spacing:-.025em;margin-top:1.15rem}
+[data-testid="stSidebar"] h3{font-size:1.03rem;margin-top:.8rem}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li{line-height:1.5}
 [data-testid="stWidgetLabel"] p,
 [data-testid="stWidgetLabel"] label,
-.stApp small {
-    color: var(--hv-soft) !important;
-    opacity: 1 !important;
+[data-testid="stSidebar"] label{
+  color:var(--hv-text)!important;font-weight:700!important;opacity:1!important;
 }
-[data-testid="stWidgetLabel"] p { font-weight: 650; }
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-    color: var(--hv-text) !important;
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p,
+.stApp small{color:var(--hv-muted)!important;opacity:1!important}
+/* Crucial: fix BOTH the input and its enclosing BaseWeb wrapper. Previously
+   some date pickers retained a pale wrapper with nearly-white input text. */
+.stApp [data-baseweb="input"],
+.stApp [data-baseweb="input"]>div,
+.stApp [data-baseweb="select"],
+.stApp [data-baseweb="select"]>div,
+.stApp [data-baseweb="textarea"],
+.stApp [data-baseweb="textarea"]>div,
+.stApp [data-testid="stDateInput"] [data-baseweb="input"],
+.stApp [data-testid="stDateInput"] [data-baseweb="input"]>div,
+.stApp [data-testid="stNumberInput"] [data-baseweb="input"],
+.stApp [data-testid="stNumberInput"] [data-baseweb="input"]>div{
+  background-color:var(--hv-field)!important;
+  color:var(--hv-text)!important;
+  border-color:var(--hv-field-border)!important;
 }
-/* CALCULATION KPI CARDS: labels, values, delta all remain high contrast */
-[data-testid="stMetric"] {
-    background: var(--hv-panel);
-    border: 1px solid var(--hv-border);
-    border-top: 3px solid var(--hv-green-dark);
-    padding: 18px 16px;
-    border-radius: 13px;
-    min-height: 117px;
-    box-shadow: 0 4px 18px rgba(0, 0, 0, .10);
+.stApp input,.stApp textarea,
+.stApp [data-baseweb="input"] input,
+.stApp [data-baseweb="select"] input,
+.stApp [data-testid="stDateInput"] input,
+.stApp [data-testid="stNumberInput"] input{
+  background:var(--hv-field)!important;
+  color:var(--hv-text)!important;
+  -webkit-text-fill-color:var(--hv-text)!important;
+  caret-color:var(--hv-green)!important;
+  font-size:.95rem!important;font-weight:650!important;
+  opacity:1!important;
+  color-scheme:dark;
 }
-[data-testid="stMetricLabel"],
-[data-testid="stMetricLabel"] p,
-[data-testid="stMetricLabel"] div,
-[data-testid="stMetric"] label {
-    color: var(--hv-soft) !important;
-    font-weight: 650;
-    opacity: 1 !important;
+.stApp input::placeholder,.stApp textarea::placeholder{
+  color:var(--hv-muted)!important;-webkit-text-fill-color:var(--hv-muted)!important;opacity:1!important;
 }
-[data-testid="stMetricValue"],
-[data-testid="stMetricValue"] div {
-    color: var(--hv-text) !important;
-    font-weight: 800 !important;
-    font-variant-numeric: tabular-nums;
-}
-[data-testid="stMetricDelta"] { color: var(--hv-green) !important; }
-/* INPUTS: applies to number, text, dates, select and BaseWeb components */
-.stApp input,
-.stApp textarea,
-.stApp [data-baseweb="input"] > div,
-.stApp [data-baseweb="select"] > div,
-.stApp [data-baseweb="textarea"] > div,
-.stApp [data-testid="stNumberInput"] input,
-.stApp [data-testid="stDateInput"] input {
-    background-color: var(--hv-input) !important;
-    color: var(--hv-text) !important;
-    -webkit-text-fill-color: var(--hv-text) !important;
-    border-color: var(--hv-border) !important;
-    border-radius: 8px;
-    caret-color: var(--hv-green);
-}
-.stApp input::placeholder,
-.stApp textarea::placeholder { color: var(--hv-muted) !important; opacity: 1 !important; }
-.stApp input:disabled, .stApp [aria-disabled="true"] input {
-    color: var(--hv-soft) !important;
-    -webkit-text-fill-color: var(--hv-soft) !important;
-    opacity: .85 !important;
-}
-.stApp [data-baseweb="select"] svg,
-.stApp [data-baseweb="input"] svg,
-.stApp [data-testid="stDateInput"] svg {
-    fill: var(--hv-soft) !important;
-    color: var(--hv-soft) !important;
+.stApp input:disabled,.stApp input[disabled],.stApp [aria-disabled="true"] input{
+  color:var(--hv-soft)!important;-webkit-text-fill-color:var(--hv-soft)!important;opacity:1!important;
 }
 .stApp [data-baseweb="input"]:focus-within,
-.stApp [data-baseweb="select"]:focus-within {
-    outline: 2px solid var(--hv-green);
-    outline-offset: 1px;
+.stApp [data-baseweb="select"]:focus-within{
+  outline:2px solid var(--hv-green)!important;outline-offset:1px;
 }
-/* Date picker and select overlays are rendered in a BaseWeb portal */
-[data-baseweb="popover"], [data-baseweb="menu"],
-[data-baseweb="calendar"], [role="listbox"], [role="dialog"] {
-    background-color: var(--hv-panel) !important;
-    color: var(--hv-text) !important;
-    border-color: var(--hv-border) !important;
+.stApp [data-baseweb="input"] svg,
+.stApp [data-baseweb="select"] svg,
+.stApp [data-testid="stDateInput"] svg{
+  fill:var(--hv-soft)!important;color:var(--hv-soft)!important;
 }
-[data-baseweb="popover"] *, [data-baseweb="menu"] *,
-[data-baseweb="calendar"] *, [role="listbox"] * {
-    color: var(--hv-text);
+.stApp [data-baseweb="select"] [role="combobox"],
+.stApp [data-baseweb="select"] [role="combobox"] *,
+.stApp [data-testid="stSelectbox"] *[aria-selected]{color:var(--hv-text)!important}
+/* Dropdowns / date calendar overlays: native dark theme colors. */
+[data-baseweb="popover"],[data-baseweb="menu"],
+[data-baseweb="calendar"],[role="listbox"],
+[data-baseweb="popover"] [role="dialog"]{
+  background:var(--hv-card)!important;color:var(--hv-text)!important;
+  border-color:var(--hv-field-border)!important;
 }
-[role="option"]:hover, [role="option"][aria-selected="true"] {
-    background-color: #285542 !important;
+[data-baseweb="popover"] *,[data-baseweb="menu"] *,
+[data-baseweb="calendar"] *,[role="listbox"] *{color:var(--hv-text)}
+[role="option"][aria-selected="true"],[role="option"]:hover{
+  background-color:#275842!important;
 }
-/* Buttons and interaction targets */
-.stButton button, .stDownloadButton button,
-[data-testid="stNumberInput"] button {
-    background: var(--hv-green-dark) !important;
-    border: 1px solid #2AB88B !important;
-    color: #FFFFFF !important;
-    border-radius: 9px !important;
-    font-weight: 700;
+/* Step buttons, downloads, and selected controls */
+.stButton button,.stDownloadButton button,
+[data-testid="stNumberInput"] button{
+  background:var(--hv-green-dark)!important;color:#FFFFFF!important;
+  border:1px solid #3AE1B0!important;font-weight:750!important;border-radius:8px!important;
 }
-.stButton button *, .stDownloadButton button *,
-[data-testid="stNumberInput"] button * { color: #FFFFFF !important; }
-.stButton button:hover, .stDownloadButton button:hover,
-[data-testid="stNumberInput"] button:hover {
-    background: #009773 !important;
-    border-color: var(--hv-green) !important;
+.stButton button *,.stDownloadButton button *,
+[data-testid="stNumberInput"] button *{color:#FFFFFF!important}
+.stButton button:hover,.stDownloadButton button:hover,
+[data-testid="stNumberInput"] button:hover{background:#029775!important}
+.stApp [data-baseweb="checkbox"] [aria-checked="true"]{
+  background:var(--hv-green-dark)!important;border-color:var(--hv-green)!important;
 }
-.stButton button:focus-visible, .stDownloadButton button:focus-visible {
-    outline: 2px solid var(--hv-green);
-    outline-offset: 3px;
+.stApp [data-baseweb="radio"] [aria-checked="true"]{
+  border-color:var(--hv-green)!important;
 }
-/* Radio/check marks and selected choices */
-.stApp [data-baseweb="radio"] label,
-.stApp [data-baseweb="checkbox"] label { color: var(--hv-text) !important; }
-.stApp [data-baseweb="radio"] [aria-checked="true"],
-.stApp [data-baseweb="checkbox"] [aria-checked="true"] {
-    accent-color: var(--hv-green) !important;
+[data-testid="stDataFrame"],[data-testid="stTable"],
+[data-testid="stExpander"]{
+  background:var(--hv-card)!important;border:1px solid var(--hv-line)!important;
+  border-radius:11px;
 }
-/* Dataframe itself follows config.toml; frame, headings and expander get borders */
-[data-testid="stDataFrame"], [data-testid="stTable"],
-[data-testid="stExpander"], [data-testid="stExpanderDetails"] {
-    background-color: var(--hv-panel) !important;
-    border: 1px solid var(--hv-border);
-    border-radius: 10px;
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary *{color:var(--hv-text)!important}
+[data-testid="stAlert"]{border-radius:11px}
+[data-testid="stAlert"] p,[data-testid="stAlert"] li{color:var(--hv-text)!important}
+.stApp hr{border-color:var(--hv-line)!important}
+.stApp a{color:#62F0C4!important}
+/* Custom KPI replaces st.metric, whose value and label ellipsize at 4 columns. */
+.hv-kpi-grid{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:8px 0 19px;
 }
-[data-testid="stExpander"] summary { color: var(--hv-text) !important; font-weight: 700; }
-[data-testid="stAlert"] { border-radius: 11px; }
-[data-testid="stAlert"] p, [data-testid="stAlert"] li { color: var(--hv-text) !important; }
-.stApp hr { border-color: var(--hv-border) !important; }
-.stApp a { color: var(--hv-green) !important; text-underline-offset: 3px; }
-.stApp a:hover { color: #93FFD5 !important; }
-/* Small displays: metrics wrap cleanly, without shrinking figures to unreadable size */
-@media (max-width: 700px) {
-    [data-testid="stMetric"] { padding: 12px; min-height: 98px; }
-    [data-testid="stMetricValue"] { font-size: 1.28rem !important; }
+.hv-kpi{
+  min-width:0;background:var(--hv-card);
+  border:1px solid var(--hv-line);border-top:3px solid #16BE8B;
+  border-radius:12px;padding:14px 13px 12px;
+  display:flex;flex-direction:column;justify-content:space-between;gap:8px;
+}
+.hv-kpi-label{color:var(--hv-soft);font-weight:700;font-size:.85rem;
+  line-height:1.45;min-height:2.55em;overflow-wrap:anywhere;
+}
+.hv-kpi-value{color:#FFFFFF;font-weight:850;letter-spacing:-.04em;
+  font-size:clamp(1.22rem,1.72vw,1.68rem);line-height:1.25;
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;word-break:keep-all;
+}
+.hv-kpi-detail{color:var(--hv-muted);font-size:.76rem;line-height:1.3;
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
+}
+.hv-kpi--green{border-top-color:var(--hv-green)}
+.hv-kpi--green .hv-kpi-value{color:#75F5CA}
+.hv-kpi-grid--solo{grid-template-columns:minmax(0,1fr);max-width:100%}
+.hv-kpi-grid--solo .hv-kpi{min-height:92px}
+@media (max-width:1050px){
+  .hv-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hv-kpi-grid--solo{grid-template-columns:1fr}
+  .hv-kpi-label{min-height:0}
+  .hv-kpi-value{font-size:1.42rem}
+}
+@media (max-width:570px){
+  .hv-kpi{padding:11px 10px;gap:5px}
+  .hv-kpi-label{font-size:.78rem}
+  .hv-kpi-value{font-size:1.15rem}
+  .hv-kpi-detail{font-size:.7rem}
+  .stApp h1{font-size:1.7rem}
 }
 </style>''', unsafe_allow_html=True)
+
+
+def _short_krw(value: int) -> str:
+    # Readable headline; exact won value always appears below.
+    n = int(value)
+    if n < 10_000:
+        return f'{n:,}원'
+    if n < 100_000_000:
+        units = n / 10_000
+        if n % 10_000 == 0:
+            return f'{int(units):,}만원'
+        return f'약 {units:,.1f}만원'
+    eok, rest = divmod(n, 100_000_000)
+    man = rest // 10_000
+    if man:
+        result = f'{eok:,}억 {man:,}만원'
+    else:
+        result = f'{eok:,}억원'
+    return ('약 ' if n % 10_000 else '') + result
+
+
+def _kpis(items: list[tuple[str, str, str]], *, green_last: bool = False) -> None:
+    # item: title, large display, exact/detail, no truncation.
+    from html import escape
+    cards = []
+    for idx, (title, amount, detail) in enumerate(items):
+        class_name = 'hv-kpi hv-kpi--green' if green_last and idx == len(items) - 1 else 'hv-kpi'
+        cards.append(
+            f'<div class="{class_name}">'
+            f'<div class="hv-kpi-label">{escape(title)}</div>'
+            f'<div class="hv-kpi-value">{escape(str(amount))}</div>'
+            f'<div class="hv-kpi-detail">{escape(detail)}</div>'
+            '</div>'
+        )
+    solo = ' hv-kpi-grid--solo' if len(cards) == 1 else ''
+    st.markdown(f'<div class="hv-kpi-grid{solo}">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
+def _won_kpi(title: str, amount: int) -> tuple[str, str, str]:
+    return title, _short_krw(amount), f'{int(amount):,}원'
+
 st.title('HanaV Pension Tax Lab')
 st.caption('2026년 세법 기반 퇴직소득세·IRP 연금수령 비교 | 내부 상담용 시뮬레이터 (실제 원천징수 확정세액 아님)')
 
@@ -192,6 +229,7 @@ with st.sidebar:
                                 disabled=not manual_years)) if manual_years else computed_years
     gross_retirement = st.number_input('퇴직급여 총액(원)', min_value=0, value=100_000_000, step=1_000_000, format='%d')
     non_taxable = st.number_input('비과세 퇴직소득(원)', min_value=0, value=0, step=100_000)
+    st.caption(f'입력 퇴직급여: {gross_retirement:,}원 · 비과세: {non_taxable:,}원')
 
 if years is None:
     st.error('입사일과 퇴직일의 순서를 확인해 주세요.')
@@ -203,11 +241,12 @@ if non_taxable > gross_retirement:
 ret_tax = estimate_retirement_tax(int(gross_retirement), int(years), int(non_taxable))
 
 st.subheader('① 퇴직소득세 — 2026년 기본 산식')
-met1,met2,met3,met4 = st.columns(4)
-met1.metric('세법상 근속연수', f'{years}년')
-met2.metric('퇴직소득세', f'{ret_tax.income_tax:,}원')
-met3.metric('지방소득세', f'{ret_tax.local_income_tax:,}원')
-met4.metric('일시금 수령시 추정 합계세금', f'{ret_tax.total_tax:,}원')
+_kpis([
+    ('세법상 근속연수', f'{years}년', f'입사 {entry:%Y.%m.%d} · 퇴직 {retirement_day:%Y.%m.%d}'),
+    _won_kpi('퇴직소득세', ret_tax.income_tax),
+    _won_kpi('지방소득세', ret_tax.local_income_tax),
+    _won_kpi('일시금 수령 시 추정 합계세금', ret_tax.total_tax),
+], green_last=True)
 with st.expander('퇴직소득세 계산 경로 펼치기'):
     st.dataframe(pd.DataFrame([
         ['퇴직급여 총액',ret_tax.gross],['근속연수공제',ret_tax.service_deduction],
@@ -242,11 +281,13 @@ if planned_date.year != year:
 if not eligible_now:
     st.warning(f'일반적인 연금수령 요건을 아직 충족하지 않습니다. 최초 가능일: {qualifying.isoformat()} (특례 수령은 별도 검토)')
 
-m1,m2,m3,m4 = st.columns(4)
-m1.metric('예정일 만 나이', f'{age_on(birth,planned_date)}세')
-m2.metric('한도 산정 기산연차', '6년차' if legacy else '1년차')
-m3.metric('금년도 연금수령연차', f'{count}년차' if count else '수령자격 전')
-m4.metric('올해 연금수령한도', '한도 제한 없음' if count and count >= 11 else f'{limit:,}원')
+_kpis([
+    ('수령예정일 만 나이', f'{age_on(birth,planned_date)}세', f'{planned_date:%Y.%m.%d} 기준'),
+    ('한도 산정 기산연차', '6년차' if legacy else '1년차', '경과규정 적용' if legacy else '일반 산정'),
+    ('금년도 한도 산정 연차', f'{count}년차' if count else '수령자격 전', f'{year}년 기준'),
+    ('올해 연금수령한도', '한도 제한 없음' if count and count >= 11 else _short_krw(limit),
+     '법정 한도 제한 없음' if count and count >= 11 else f'{limit:,}원'),
+], green_last=True)
 if legacy and plan_type == 'DB' and db_full:
     st.info('2013.3.1 이전 DB 가입 + 퇴직소득 전액 신규 IRP 이체 특례를 적용했습니다.')
 elif legacy:
@@ -291,11 +332,12 @@ result = calculate_withdrawal(
     age=age_on(birth, planned_date), calendar_year=int(year), qualifies=eligible_now)
 
 st.subheader('④ 수령금액별 과세 결과')
-cm1,cm2,cm3,cm4 = st.columns(4)
-cm1.metric('연금으로 인정되는 금액',f'{result.pension_amount:,}원')
-cm2.metric('연금외수령 금액',f'{result.nonpension_amount:,}원')
-cm3.metric('이번 수령 예상 세금(지방세 포함)',f'{result.total_tax:,}원')
-cm4.metric('이번 수령 세후 실수령액',f'{result.total_net:,}원')
+_kpis([
+    _won_kpi('연금수령 인정금액', result.pension_amount),
+    _won_kpi('연금외수령 금액', result.nonpension_amount),
+    _won_kpi('이번 수령 예상 세금(지방세 포함)', result.total_tax),
+    _won_kpi('이번 수령 세후 실수령액', result.total_net),
+], green_last=True)
 
 output = pd.DataFrame([{
     '재원': r.resource, '인출 분류':r.treatment, '수령금액(원)':r.gross,
@@ -306,7 +348,7 @@ if not output.empty:
     st.dataframe(output, use_container_width=True, hide_index=True)
     st.download_button('수령 세율별 결과 CSV 다운로드', output.to_csv(index=False).encode('utf-8-sig'),
                        file_name=f'연금세액비교_{year}.csv', mime='text/csv')
-st.metric('동일 금액 전액 연금외수령 가정 대비 추정 세금 절감',f'{result.saving_vs_all_lump:,}원')
+_kpis([_won_kpi('동일 금액 전액 연금외수령 가정 대비 추정 절세액', result.saving_vs_all_lump)], green_last=True)
 st.caption(f'비교기준: 전액 연금외수령시 약 {result.hypothetical_all_lump_tax:,}원 vs 현재 계획 {result.total_tax:,}원. 자산운용수익·물가·세법변경 미반영.')
 
 st.divider()
