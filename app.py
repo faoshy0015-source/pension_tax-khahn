@@ -171,6 +171,51 @@ st.markdown('''<style>
   .stApp h1{font-size:1.7rem}
 }
 
+/* Limit formula popover trigger: fix white-on-white default Streamlit button.
+   st.popover does not inherit the .stButton styles above. */
+.stApp [data-testid="stPopover"] button,
+.stApp [data-testid="stPopover"] [data-testid^="stBaseButton"] {
+  background:#173849!important;
+  background-color:#173849!important;
+  color:#F7FFFC!important;
+  -webkit-text-fill-color:#F7FFFC!important;
+  border:1px solid #48E4AD!important;
+  border-radius:9px!important;
+  box-shadow:0 0 0 1px rgba(72,228,173,.09)!important;
+  min-height:42px!important;
+  padding:9px 16px!important;
+  font-size:.93rem!important;
+  font-weight:800!important;
+  opacity:1!important;
+}
+.stApp [data-testid="stPopover"] button *,
+.stApp [data-testid="stPopover"] [data-testid^="stBaseButton"] * {
+  color:#F7FFFC!important;
+  -webkit-text-fill-color:#F7FFFC!important;
+  opacity:1!important;
+}
+.stApp [data-testid="stPopover"] button:hover,
+.stApp [data-testid="stPopover"] button[aria-expanded="true"] {
+  background:#006E59!important;
+  background-color:#006E59!important;
+  border-color:#73F7CD!important;
+}
+.stApp [data-testid="stPopover"] button:focus-visible {
+  outline:2px solid #73F7CD!important;
+  outline-offset:2px!important;
+}
+/* Open formula content retains dark text contrast even without config.toml. */
+[data-testid="stPopoverBody"],
+[data-baseweb="popover"] [data-testid="stPopoverBody"] {
+  background:#172B3A!important;
+  color:#FFFFFF!important;
+  border:1px solid #416073!important;
+}
+[data-testid="stPopoverBody"] p,
+[data-testid="stPopoverBody"] h4,
+[data-testid="stPopoverBody"] strong,
+[data-testid="stPopoverBody"] span {color:#F7FFFC!important}
+
 /* Hover/focus explanation table: replaces Streamlit's pale dataframe inside expander. */
 .hv-calc-intro{color:#C9DEE8;font-size:.86rem;margin:2px 0 12px}
 .hv-calc-scroll{width:100%;overflow:visible}
