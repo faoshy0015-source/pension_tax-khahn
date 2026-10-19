@@ -8,11 +8,167 @@ from retirement_core import (
 )
 
 st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout='wide')
+# The CSS is intentionally embedded in app.py so a GitHub update to this file
+# alone still provides readable colors. .streamlit/config.toml supplies a matching
+# native Streamlit dark theme (including dataframe/editor internals and popovers).
 st.markdown('''<style>
-.stApp{background:#0b1720;color:#edf4f1}
-[data-testid="stSidebar"]{background:#10251e}
-[data-testid="stMetric"]{background:#17352a;border:1px solid #295644;padding:14px;border-radius:12px}
-h1,h2,h3{color:#dff7e9} .stButton button{background:#006a45;color:white;border-radius:8px}
+:root {
+    --hv-bg: #0B1420;
+    --hv-side: #101F2C;
+    --hv-panel: #172A3A;
+    --hv-input: #203348;
+    --hv-border: #456074;
+    --hv-text: #F5FAFF;
+    --hv-soft: #D2E0EC;
+    --hv-muted: #B9CFDD;
+    --hv-green: #53E3B0;
+    --hv-green-dark: #007A5A;
+}
+/* APP + TYPOGRAPHY: avoid almost-black labels on dark backgrounds */
+.stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+    background-color: var(--hv-bg);
+    color: var(--hv-text);
+}
+[data-testid="stHeader"] { background-color: rgba(11, 20, 32, .95); }
+[data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+    background-color: var(--hv-side) !important;
+}
+.stApp h1, .stApp h2, .stApp h3,
+.stApp h4, .stApp h5, .stApp h6 { color: var(--hv-text) !important; }
+.stApp h1 { letter-spacing: -.035em; font-weight: 800; }
+.stApp h2, .stApp h3 { margin-top: .5rem; }
+.stApp p, .stApp li, .stApp span,
+[data-testid="stMarkdownContainer"] { color: inherit; }
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] label,
+.stApp small {
+    color: var(--hv-soft) !important;
+    opacity: 1 !important;
+}
+[data-testid="stWidgetLabel"] p { font-weight: 650; }
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+    color: var(--hv-text) !important;
+}
+/* CALCULATION KPI CARDS: labels, values, delta all remain high contrast */
+[data-testid="stMetric"] {
+    background: var(--hv-panel);
+    border: 1px solid var(--hv-border);
+    border-top: 3px solid var(--hv-green-dark);
+    padding: 18px 16px;
+    border-radius: 13px;
+    min-height: 117px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .10);
+}
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricLabel"] div,
+[data-testid="stMetric"] label {
+    color: var(--hv-soft) !important;
+    font-weight: 650;
+    opacity: 1 !important;
+}
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] div {
+    color: var(--hv-text) !important;
+    font-weight: 800 !important;
+    font-variant-numeric: tabular-nums;
+}
+[data-testid="stMetricDelta"] { color: var(--hv-green) !important; }
+/* INPUTS: applies to number, text, dates, select and BaseWeb components */
+.stApp input,
+.stApp textarea,
+.stApp [data-baseweb="input"] > div,
+.stApp [data-baseweb="select"] > div,
+.stApp [data-baseweb="textarea"] > div,
+.stApp [data-testid="stNumberInput"] input,
+.stApp [data-testid="stDateInput"] input {
+    background-color: var(--hv-input) !important;
+    color: var(--hv-text) !important;
+    -webkit-text-fill-color: var(--hv-text) !important;
+    border-color: var(--hv-border) !important;
+    border-radius: 8px;
+    caret-color: var(--hv-green);
+}
+.stApp input::placeholder,
+.stApp textarea::placeholder { color: var(--hv-muted) !important; opacity: 1 !important; }
+.stApp input:disabled, .stApp [aria-disabled="true"] input {
+    color: var(--hv-soft) !important;
+    -webkit-text-fill-color: var(--hv-soft) !important;
+    opacity: .85 !important;
+}
+.stApp [data-baseweb="select"] svg,
+.stApp [data-baseweb="input"] svg,
+.stApp [data-testid="stDateInput"] svg {
+    fill: var(--hv-soft) !important;
+    color: var(--hv-soft) !important;
+}
+.stApp [data-baseweb="input"]:focus-within,
+.stApp [data-baseweb="select"]:focus-within {
+    outline: 2px solid var(--hv-green);
+    outline-offset: 1px;
+}
+/* Date picker and select overlays are rendered in a BaseWeb portal */
+[data-baseweb="popover"], [data-baseweb="menu"],
+[data-baseweb="calendar"], [role="listbox"], [role="dialog"] {
+    background-color: var(--hv-panel) !important;
+    color: var(--hv-text) !important;
+    border-color: var(--hv-border) !important;
+}
+[data-baseweb="popover"] *, [data-baseweb="menu"] *,
+[data-baseweb="calendar"] *, [role="listbox"] * {
+    color: var(--hv-text);
+}
+[role="option"]:hover, [role="option"][aria-selected="true"] {
+    background-color: #285542 !important;
+}
+/* Buttons and interaction targets */
+.stButton button, .stDownloadButton button,
+[data-testid="stNumberInput"] button {
+    background: var(--hv-green-dark) !important;
+    border: 1px solid #2AB88B !important;
+    color: #FFFFFF !important;
+    border-radius: 9px !important;
+    font-weight: 700;
+}
+.stButton button *, .stDownloadButton button *,
+[data-testid="stNumberInput"] button * { color: #FFFFFF !important; }
+.stButton button:hover, .stDownloadButton button:hover,
+[data-testid="stNumberInput"] button:hover {
+    background: #009773 !important;
+    border-color: var(--hv-green) !important;
+}
+.stButton button:focus-visible, .stDownloadButton button:focus-visible {
+    outline: 2px solid var(--hv-green);
+    outline-offset: 3px;
+}
+/* Radio/check marks and selected choices */
+.stApp [data-baseweb="radio"] label,
+.stApp [data-baseweb="checkbox"] label { color: var(--hv-text) !important; }
+.stApp [data-baseweb="radio"] [aria-checked="true"],
+.stApp [data-baseweb="checkbox"] [aria-checked="true"] {
+    accent-color: var(--hv-green) !important;
+}
+/* Dataframe itself follows config.toml; frame, headings and expander get borders */
+[data-testid="stDataFrame"], [data-testid="stTable"],
+[data-testid="stExpander"], [data-testid="stExpanderDetails"] {
+    background-color: var(--hv-panel) !important;
+    border: 1px solid var(--hv-border);
+    border-radius: 10px;
+}
+[data-testid="stExpander"] summary { color: var(--hv-text) !important; font-weight: 700; }
+[data-testid="stAlert"] { border-radius: 11px; }
+[data-testid="stAlert"] p, [data-testid="stAlert"] li { color: var(--hv-text) !important; }
+.stApp hr { border-color: var(--hv-border) !important; }
+.stApp a { color: var(--hv-green) !important; text-underline-offset: 3px; }
+.stApp a:hover { color: #93FFD5 !important; }
+/* Small displays: metrics wrap cleanly, without shrinking figures to unreadable size */
+@media (max-width: 700px) {
+    [data-testid="stMetric"] { padding: 12px; min-height: 98px; }
+    [data-testid="stMetricValue"] { font-size: 1.28rem !important; }
+}
 </style>''', unsafe_allow_html=True)
 st.title('HanaV Pension Tax Lab')
 st.caption('2026년 세법 기반 퇴직소득세·IRP 연금수령 비교 | 내부 상담용 시뮬레이터 (실제 원천징수 확정세액 아님)')
