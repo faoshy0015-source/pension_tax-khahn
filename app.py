@@ -918,6 +918,292 @@ def _tvm_draw_page() -> None:
             st.error(f'운용 비교 계산을 완료할 수 없습니다: {exc}')
 
 
+# ===== Client-facing IRP acquisition proposal generator (assumption-driven) =====
+def _proposal_annual_paths(principal: int, years: int, monthly_flow: int,
+                           gross_return_percent: float, annual_cost_percent: float) -> tuple[list[int], int | None]:
+    """Balance at each anniversary; do not let a spending model borrow below zero."""
+    if principal < 0 or years < 1 or years > 40:
+        raise ValueError('운용 원금 또는 기간 입력을 확인해 주세요.')
+    if annual_cost_percent < 0 or not (-99.0 < gross_return_percent - annual_cost_percent <= 200):
+        raise ValueError('비용 차감 후 수익률은 -99% 초과~200% 이하여야 합니다.')
+    annual_net = (gross_return_percent - annual_cost_percent) / 100
+    monthly_return = math.expm1(math.log1p(annual_net) / 12)
+    balance = float(principal)
+    output = [int(principal)]
+    depleted_month = None
+    for month in range(1, years * 12 + 1):
+        next_value = balance * (1 + monthly_return) + monthly_flow
+        if next_value <= 0:
+            if depleted_month is None and (balance > 0 or monthly_flow < 0):
+                depleted_month = month
+            balance = 0.0
+        else:
+            balance = next_value
+        if month % 12 == 0:
+            output.append(round(balance))
+    return output, depleted_month
+
+
+def _proposal_won(amount: int | float) -> str:
+    return f'{round(amount):,}원'
+
+
+def _proposal_interpretation(bank_final: int, sec_final: int, risk: str,
+                             strategy_risk: str, is_sec_guaranteed: bool) -> str:
+    diff = sec_final - bank_final
+    if diff > 0:
+        base = ('제시된 수익률·비용 가정이 실현될 때 하나증권 운용안의 예상 평가액이 '
+                f'{_proposal_won(diff)} 높습니다. 이는 세제 우위가 아니라 가정한 운용 성과 차이입니다.')
+    elif diff < 0:
+        base = ('현재 입력 조건에서는 은행 IRP 운용안의 예상 평가액이 '
+                f'{_proposal_won(-diff)} 높아, 수익률만으로 하나증권 이전을 권유할 근거가 없습니다.')
+    else:
+        base = '현재 입력 조건에서는 두 IRP의 예상 평가액이 같습니다. 상품 특성·수수료·서비스를 비교해야 합니다.'
+    if risk == '원금보전 최우선' and not is_sec_guaranteed:
+        base += ' 고객이 원금보전을 최우선으로 하므로, 실적배당상품 확대보다 원금보장형 대안과 위험자산 편입 한도를 우선 검토하세요.'
+    elif strategy_risk == '실적배당형 비중 높음':
+        base += ' 하나증권 운용안은 실적배당형 비중이 높아 손실 가능성과 적합성·위험설명이 필요합니다.'
+    return base
+
+
+def _proposal_html(data: dict, rows: list[dict], decision: str) -> bytes:
+    """Print-ready, self-contained HTML. Customers can save it as PDF using Ctrl+P."""
+    def e(value):
+        return escape(str(value), quote=True)
+    bank_end = int(data['bank_final'])
+    hana_end = int(data['hana_final'])
+    diff = hana_end - bank_end
+    conclusion = ('하나증권 우세(가정)' if diff > 0 else
+                  '은행 IRP 우세(가정)' if diff < 0 else '예상 평가액 동일')
+    body_rows = ''.join(
+        '<tr><td>'+e(x['경과연도'])+'년</td><td>'+e(_proposal_won(x['은행 IRP 예상잔액']))+'</td>'
+        '<td>'+e(_proposal_won(x['하나증권 IRP 예상잔액']))+'</td>'
+        '<td>'+e(_proposal_won(x['차이(하나증권-은행)']))+'</td></tr>' for x in rows)
+
+    html = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>HanaV IRP 운용 제안서</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+@page{size:A4;margin:14mm}*{box-sizing:border-box}body{font-family:"Malgun Gothic","Apple SD Gothic Neo",Arial,sans-serif;color:#152636;background:white;margin:0 auto;max-width:850px;font-size:12px;line-height:1.5}
+header{border-bottom:3px solid #00816b;padding:8px 0 13px;display:flex;justify-content:space-between;align-items:end}h1{margin:0;font-size:24px;color:#093c39}h2{font-size:16px;color:#00785c;margin:23px 0 8px}p{margin:7px 0}.muted{color:#657586}.summary{margin-top:14px;padding:14px;background:#eff9f6;border:1px solid #bee0d4;border-radius:9px}.summary b{font-size:18px;color:#08674f}.cards{display:flex;gap:9px;margin-top:14px}.card{flex:1;border:1px solid #cbdad9;border-radius:8px;padding:11px}.card span{font-size:11px;color:#556775}.card strong{display:block;font-size:17px;color:#133b42;margin-top:5px}table{border-collapse:collapse;width:100%;font-size:11px;margin-top:8px}th,td{border:1px solid #dae2e7;padding:6px 8px;text-align:right}th:first-child,td:first-child{text-align:left}th{background:#eef5f5;color:#184745}.notes{padding:12px;border-left:4px solid #ad733a;background:#fffaf0;margin:10px 0}.small{font-size:10px;color:#687b88}footer{margin-top:20px;border-top:1px solid #cbdad9;padding:9px 0;font-size:10px;color:#64747b}.print-bar{background:#13394b;color:white;padding:12px;margin:0 0 15px;text-align:center}@media print{.print-bar{display:none}body{max-width:initial}h2{break-after:avoid}table{break-inside:avoid}}</style></head><body>
+<div class="print-bar">이 문서는 브라우저의 인쇄(Ctrl+P) 기능으로 PDF 저장이 가능합니다.</div>
+<header><div><h1>HanaV IRP 운용 제안서</h1><div class="muted">고객 맞춤형 연금자산 운용 비교 · 상담용</div></div><div class="muted">작성일: @DATE@<br>고객 식별: @CUSTOMER@</div></header>
+<div class="summary"><div>제안 요약 · @SUMMARY@</div><p><b>@YEARS@년 예상 평가액 차이: @DIFF@</b></p><p>@DECISION@</p></div>
+<h2>① 고객 자금 계획</h2><table><tbody>
+<tr><th>퇴직급여(참고)</th><td>@GROSS@</td><th>우선 확보할 현금(참고)</th><td>@CASH@</td></tr>
+<tr><th>비교대상 IRP 운용 시작원금</th><td>@PRINCIPAL@</td><th>운용기간</th><td>@YEARS@년</td></tr>
+<tr><th>매월 추가납입(+)·인출(-)</th><td>@MONTHLY@</td><th>고객 투자성향</th><td>@RISK@</td></tr>
+<tr><th>별도 연금저축(참고)</th><td>@SAVINGS@</td><th>별도 기존 IRP(참고)</th><td>@OTHERIRP@</td></tr>
+</tbody></table>
+<h2>② 금융기관별 운용 시나리오</h2><table><thead><tr><th>항목</th><th>은행 IRP</th><th>하나증권 IRP</th></tr></thead><tbody>
+<tr><td>검토 상품/전략</td><td>@BANKPRODUCT@</td><td>@HANAPRODUCT@</td></tr>
+<tr><td>연 가정수익률</td><td>@BANKGROSS@%</td><td>@HANAGROSS@%</td></tr>
+<tr><td>연 총비용 가정</td><td>@BANKFEE@%</td><td>@HANAFEE@%</td></tr>
+<tr><td>단순 차감 순수익률 가정</td><td>@BANKNET@%</td><td>@HANANET@%</td></tr>
+<tr><td>@YEARS@년 후 세전 예상 평가액</td><td>@BANKFINAL@</td><td>@HANAFINAL@</td></tr>
+<tr><td>시장 악화 가정 시 평가액</td><td>@BANKSTRESS@</td><td>@HANASTRESS@</td></tr>
+<tr><td>원금보장 여부</td><td>@BANKGUAR@</td><td>@HANAGUAR@</td></tr>
+</tbody></table>
+<div class="cards"><div class="card"><span>은행 IRP 평가액(기본)</span><strong>@BANKFINAL@</strong></div>
+<div class="card"><span>하나증권 IRP 평가액(기본)</span><strong>@HANAFINAL@</strong></div>
+<div class="card"><span>평가액 차이 (하나증권−은행)</span><strong>@DIFF@</strong></div></div>
+<h2>③ 연도별 예상 평가액 · 매년 말</h2><table><thead><tr><th>경과연도</th><th>은행 IRP</th><th>하나증권 IRP</th><th>차이</th></tr></thead><tbody>@ROWS@</tbody></table>
+<h2>④ 상담 결론 및 후속 확인</h2><div class="notes"><b>현재 가정에 대한 결론</b><p>@DECISION@</p>
+<p>은행 IRP와 하나증권 IRP는 동일한 조건에서 세법상 IRP 과세·감면 기준이 같습니다. 금융회사별 운용상품, 실제 적용 보수, 위험수준, 거래 제약, 연금지급 서비스를 확인한 후 비교해야 합니다.</p></div>
+<h2>⑤ 반드시 확인할 사항</h2><p>① 실제 이용 가능한 상품·금리·총비용(운용관리/자산관리/상품보수 포함) ② 원리금보장 여부·예금자보호 적용 범위 ③ 투자성향·위험자산 비중 제한 및 원금손실 가능성 ④ 연금계좌 이전 절차, 인출 계획 및 향후 인출 시 세액 ⑤ 연금자산 인출에 따른 현금흐름·유동성</p>
+<footer>본 자료는 고객이 입력한 가정에 따른 <b>조건부 시뮬레이션</b>이며 확정수익·세후 실수령 보장·금융회사 고유 세제혜택을 뜻하지 않습니다. 연 수익률에서 연 비용률을 단순 차감하여 일정하게 유지하고, 월말 납입/인출·월 유효수익률 복리로 계산합니다. 운용 중 손실, 수익률 변동, 상품별 기타 비용, 거래 제한, 향후 인출 시 퇴직소득세·연금소득세 및 물가변동은 별도로 확인해야 합니다. 본 자료의 원금·기존 계좌 정보는 중복 합산하지 않았습니다. 개인정보를 포함한 자료는 별도 관리하세요.</footer></body></html>"""
+    replacements = {
+        '@DATE@': data['date'], '@CUSTOMER@': data['customer'] or '익명 고객',
+        '@SUMMARY@': conclusion, '@YEARS@': data['years'],
+        '@DIFF@': ('+' if diff>0 else '') + _proposal_won(diff),
+        '@DECISION@': decision, '@ROWS@': body_rows,
+        '@GROSS@': _proposal_won(data['gross']), '@CASH@': _proposal_won(data['cash']),
+        '@PRINCIPAL@': _proposal_won(data['principal']),
+        '@MONTHLY@': _proposal_won(data['monthly']), '@RISK@': data['risk'],
+        '@SAVINGS@': _proposal_won(data['savings']), '@OTHERIRP@': _proposal_won(data['other_irp']),
+        '@BANKPRODUCT@': data['bank_product'], '@HANAPRODUCT@': data['hana_product'],
+        '@BANKGROSS@': f"{data['bank_rate']:.2f}", '@HANAGROSS@': f"{data['hana_rate']:.2f}",
+        '@BANKFEE@': f"{data['bank_fee']:.2f}", '@HANAFEE@': f"{data['hana_fee']:.2f}",
+        '@BANKNET@': f"{data['bank_rate']-data['bank_fee']:.2f}",
+        '@HANANET@': f"{data['hana_rate']-data['hana_fee']:.2f}",
+        '@BANKFINAL@': _proposal_won(bank_end), '@HANAFINAL@': _proposal_won(hana_end),
+        '@BANKSTRESS@': _proposal_won(data['bank_stress_final']),
+        '@HANASTRESS@': _proposal_won(data['hana_stress_final']),
+        '@BANKGUAR@': '원리금보장형 가정' if data['bank_guaranteed'] else '비보장형/혼합형',
+        '@HANAGUAR@': '원리금보장형 가정' if data['hana_guaranteed'] else '비보장형/혼합형',
+    }
+    for keyword, val in replacements.items():
+        html = html.replace(keyword, val if keyword == '@ROWS@' else e(val))
+    return html.encode('utf-8-sig')
+
+
+def _proposal_load_sample() -> None:
+    st.session_state.update({
+        'hv_prop_gross': 1_700_000_000,
+        'hv_prop_cash': 500_000_000,
+        'hv_prop_principal': 1_088_894_913,
+        'hv_prop_savings': 70_000_000,
+        'hv_prop_other_irp': 40_000_000,
+        'hv_prop_customer': '고액 퇴직금 상담 예시',
+        'hv_prop_monthly': 0,
+    })
+
+
+def _proposal_draw_page() -> None:
+    st.markdown("""<style>
+    .hv-tvm-hero{background:linear-gradient(110deg,#132E3C,#0B1C2A);
+      border:1px solid #3F716E;border-left:5px solid #48E4AD;border-radius:14px;
+      padding:18px 20px;margin-bottom:18px}
+    .hv-tvm-hero h3{margin:0 0 6px!important;color:#FFFFFF!important;font-size:1.3rem}
+    .hv-tvm-hero p{color:#CEDFE7!important;font-size:.93rem;margin:0}
+    </style>""", unsafe_allow_html=True)
+    st.markdown("""<div class="hv-tvm-hero"><h3>📄 IRP 유치 제안서 자동 생성기</h3>
+    <p>은행 IRP와 하나증권 IRP를 같은 조건으로 비교하고, 수익·비용·하락위험·고객 적합성을 포함한 상담 자료를 생성합니다.</p></div>""",
+    unsafe_allow_html=True)
+    st.caption('세제는 금융회사에 따라 달라지지 않습니다. 예상수익률은 직접 입력하는 가정이며, 상품 추천 전 실제 취급 여부·투자성향을 확인하세요.')
+    a, b = st.columns([1,2])
+    with a:
+        st.button('🎯 퇴직금 17억원 실습사례 채우기', on_click=_proposal_load_sample,
+                  use_container_width=True, key='hv_prop_sample')
+    with b:
+        current_case = st.session_state.get('hv_tvm_case_principal', 0)
+        if current_case:
+            if st.button(f'현재 퇴직세금 상담의 잔여 운용원금 {_proposal_won(current_case)} 불러오기',
+                         use_container_width=True, key='hv_prop_fetch'):
+                st.session_state['hv_prop_principal'] = int(current_case)
+                st.rerun()
+    st.markdown('#### ① 상담 대상 및 자금 계획')
+    for k, default in {
+        'hv_prop_customer': '상담 고객', 'hv_prop_principal': 1_000_000_000,
+        'hv_prop_gross': 0, 'hv_prop_cash': 0, 'hv_prop_monthly': 0,
+        'hv_prop_savings': 0, 'hv_prop_other_irp': 0,
+    }.items():
+        st.session_state.setdefault(k, default)
+    cx1, cx2, cx3 = st.columns(3)
+    with cx1:
+        customer = st.text_input('고객 구분명 (선택·실명 입력 지양)', key='hv_prop_customer')
+        gross = int(st.number_input('퇴직급여 총액 · 참고(원)', min_value=0, step=10_000_000, key='hv_prop_gross'))
+        cash = int(st.number_input('우선 확보 현금 · 참고(원)', min_value=0, step=10_000_000, key='hv_prop_cash'))
+    with cx2:
+        principal = int(st.number_input('비교할 IRP 운용 시작원금(원)', min_value=0, step=10_000_000,
+                                         format='%d', key='hv_prop_principal'))
+        years = int(st.number_input('운용기간(년)', min_value=1, max_value=40, value=10, step=1, key='hv_prop_years'))
+        monthly = int(st.number_input('매월 추가납입(+) / 인출(−)(원)', step=100_000,
+                                      format='%d', key='hv_prop_monthly'))
+    with cx3:
+        risk = st.selectbox('고객 투자성향 (상담 가정)',
+            ['원금보전 최우선','안정추구','위험중립','적극투자'], key='hv_prop_risk')
+        savings = int(st.number_input('별도 기존 연금저축(원) · 합산 제외', min_value=0,
+                                      step=1_000_000, key='hv_prop_savings'))
+        other_irp = int(st.number_input('별도 기존 IRP(원) · 합산 제외', min_value=0,
+                                        step=1_000_000, key='hv_prop_other_irp'))
+    st.info('**입력 유의:** 실습사례의 잔여 운용원금은 앞선 상담의 단순 시뮬레이션값이며 확정 잔액이 아닙니다. 비교 시작원금은 실제 운용 예정 IRP 잔액을 입력하세요. 퇴직급여·결혼자금·별도 기존 계좌는 설명용 참고값으로, 시작원금에 자동 합산하지 않습니다. 시작원금이 이연퇴직소득이라면 향후 인출세액은 별도입니다.')
+    st.markdown('#### ② 은행 IRP vs 하나증권 IRP · 실제 제안 상품 기준')
+    ba, ha = st.columns(2)
+    with ba:
+        with st.container(border=True):
+            st.markdown('**🏦 기존 은행 IRP 운용안**')
+            bank_product = st.text_input('은행 IRP 검토 상품·전략', value='원리금보장형 상품 또는 실제 운용상품', key='hv_prop_bank_product')
+            bank_rate = st.number_input('은행 연 기대/약정수익률 가정(%)', min_value=-50.0, max_value=200.0,
+                                        value=3.0, step=0.1, key='hv_prop_bank_rate')
+            bank_fee = st.number_input('은행 연간 총비용률 가정(%)', min_value=0.0, max_value=20.0,
+                                       value=0.0, step=0.05, key='hv_prop_bank_fee')
+            bank_stress = st.number_input('은행 시장악화 시 연 수익률 가정(%)', min_value=-95.0, max_value=100.0,
+                                         value=1.0, step=0.5, key='hv_prop_bank_stress')
+            bank_guaranteed = st.checkbox('비교상품을 원리금보장형으로 가정', value=True, key='hv_prop_bank_guaranteed')
+    with ha:
+        with st.container(border=True):
+            st.markdown('**📈 하나증권 IRP 제안 운용안**')
+            hana_product = st.text_input('하나증권 검토 상품·전략', value='원리금보장형 + 채권/ETF 등 조합 검토',
+                                         key='hv_prop_hana_product')
+            hana_rate = st.number_input('하나증권 연 기대수익률 가정(%)', min_value=-50.0, max_value=200.0,
+                                        value=5.0, step=0.1, key='hv_prop_hana_rate')
+            hana_fee = st.number_input('하나증권 연간 총비용률 가정(%)', min_value=0.0, max_value=20.0,
+                                       value=0.0, step=0.05, key='hv_prop_hana_fee')
+            hana_stress = st.number_input('하나증권 시장악화 시 연 수익률 가정(%)', min_value=-95.0, max_value=100.0,
+                                         value=-10.0, step=0.5, key='hv_prop_hana_stress')
+            hana_guaranteed = st.checkbox('비교상품을 원리금보장형으로 가정', value=False, key='hv_prop_hana_guaranteed')
+    strategy_risk = st.radio('하나증권 제안안의 위험구성 (설명용)',
+        ['원리금보장형 중심', '혼합형', '실적배당형 비중 높음'], horizontal=True, key='hv_prop_mix')
+    try:
+        bank_path, b_depleted = _proposal_annual_paths(principal, years, monthly, bank_rate, bank_fee)
+        hana_path, h_depleted = _proposal_annual_paths(principal, years, monthly, hana_rate, hana_fee)
+        bank_bad, b_bad_depleted = _proposal_annual_paths(principal, years, monthly, bank_stress, bank_fee)
+        hana_bad, h_bad_depleted = _proposal_annual_paths(principal, years, monthly, hana_stress, hana_fee)
+    except (ValueError, OverflowError) as exc:
+        st.error(f'운용 시뮬레이션 입력을 확인해 주세요: {exc}')
+        return
+    bank_final, hana_final = bank_path[-1], hana_path[-1]
+    diff = hana_final - bank_final
+    st.markdown('#### ③ 예상 결과 및 시장악화 시나리오')
+    _kpis([
+        ('은행 IRP 가정 순수익률', f'{bank_rate-bank_fee:.2f}%', '세전 수익률 − 연간 비용률'),
+        ('하나증권 가정 순수익률', f'{hana_rate-hana_fee:.2f}%', '세전 수익률 − 연간 비용률'),
+        _won_kpi(f'은행 IRP {years}년 후 평가액', bank_final),
+        _won_kpi(f'하나증권 IRP {years}년 후 평가액', hana_final),
+    ], green_last=diff>0)
+    if diff > 0:
+        st.success(f'같은 현금흐름과 가정하에서 하나증권 예상 평가액이 **{_proposal_won(diff)} 더 높습니다.** 확정수익이나 세제 혜택 차이는 아닙니다.')
+    elif diff < 0:
+        st.info(f'현재 가정에서는 은행 IRP의 예상 평가액이 **{_proposal_won(-diff)} 더 높습니다.**')
+    else:
+        st.info('현재 입력 조건에서는 두 IRP의 예상 평가액이 같습니다.')
+    path_rows = [{'경과연도': year,
+                  '은행 IRP 예상잔액': bank_path[year],
+                  '하나증권 IRP 예상잔액': hana_path[year],
+                  '차이(하나증권-은행)': hana_path[year]-bank_path[year]}
+                 for year in range(0, years+1)]
+    st.line_chart(pd.DataFrame({
+        '연도': list(range(years+1)),
+        '은행 IRP': bank_path,
+        '하나증권 IRP': hana_path,
+    }).set_index('연도'), height=300)
+    stress_df = pd.DataFrame([
+        {'구분':'은행 IRP', '기본 시나리오 평가액':bank_final,
+         '시장 악화 가정 평가액':bank_bad[-1], '악화 시 감소액':bank_final-bank_bad[-1]},
+        {'구분':'하나증권 IRP', '기본 시나리오 평가액':hana_final,
+         '시장 악화 가정 평가액':hana_bad[-1], '악화 시 감소액':hana_final-hana_bad[-1]},
+    ])
+    st.markdown('**하락·시장악화 가정 (연 수익률이 기간 내 일정하게 지속되는 스트레스 테스트)**')
+    st.dataframe(stress_df, hide_index=True, use_container_width=True,
+                 column_config={x: st.column_config.NumberColumn(format='%d') for x in stress_df.columns[1:]})
+    if any(x is not None for x in (b_depleted,h_depleted,b_bad_depleted,h_bad_depleted)):
+        st.error('일부 시나리오는 계획 기간 중 잔액이 소진됩니다. 결과를 확정 지급액으로 설명하지 마세요.')
+    with st.expander('ⓘ 운용 비교 계산식 · 연도별 예상금액'):
+        st.markdown('**순수익률 가정:** `연 기대수익률(%) − 연 총비용률(%)`')
+        st.markdown('**월 유효수익률:** `(1 + 연 순수익률/100)^(1/12) − 1`')
+        st.markdown('**매월 말 잔액:** `MAX(0, 전달 잔액 × (1+월 유효수익률) + 월 납입/인출액)`')
+        st.dataframe(pd.DataFrame(path_rows), hide_index=True, use_container_width=True)
+        st.caption('각 연도 표는 반올림 표시합니다. 매월 말 현금흐름이며 수익률·비용률은 상수로 가정합니다.')
+    st.markdown('#### ④ 자동 영업 결론 및 고객 제안서')
+    conclusion = _proposal_interpretation(bank_final, hana_final, risk, strategy_risk, hana_guaranteed)
+    st.markdown(f'**상담용 결론:** {conclusion}')
+    st.caption('금융회사별 IRP 과세이연·연금수령세액은 동일 법 규정이 적용됩니다. 실제 제안 상품 확인, 투자성향 적합성, 원리금보장 여부, 운용/자산관리 수수료·상품별 보수 확인은 필수입니다.')
+    doc = {
+        'date': date.today().isoformat(), 'customer': customer, 'years': years,
+        'gross': gross, 'cash': cash, 'principal': principal, 'monthly': monthly,
+        'risk': risk, 'savings': savings, 'other_irp': other_irp,
+        'bank_product': bank_product, 'hana_product': hana_product,
+        'bank_rate': bank_rate, 'hana_rate': hana_rate,
+        'bank_fee': bank_fee, 'hana_fee': hana_fee,
+        'bank_guaranteed': bank_guaranteed, 'hana_guaranteed': hana_guaranteed,
+        'bank_final': bank_final, 'hana_final': hana_final,
+        'bank_stress_final': bank_bad[-1], 'hana_stress_final': hana_bad[-1],
+    }
+    doc_bytes = _proposal_html(doc, path_rows, conclusion)
+    d1,d2=st.columns(2)
+    with d1:
+        st.download_button('📄 고객 제안서 다운로드 (인쇄용 HTML)', data=doc_bytes,
+                           file_name='HanaV_IRP_고객제안서.html', mime='text/html',
+                           use_container_width=True, key='hv_prop_html')
+    with d2:
+        st.download_button('📊 연도별 비교표 CSV 다운로드',
+                           data=pd.DataFrame(path_rows).to_csv(index=False).encode('utf-8-sig'),
+                           file_name='HanaV_IRP_운용비교.csv', mime='text/csv',
+                           use_container_width=True, key='hv_prop_csv')
+    st.caption('제안서 파일을 브라우저로 열어 **Ctrl+P → 프린터: PDF로 저장**을 선택하면 고객용 PDF가 됩니다. 고객정보는 앱 세션에서만 사용하며, 내려받은 파일의 보관·공유에 주의하세요.')
+    st.warning('예상 평가액은 향후 인출 시 세금·미래 상품 변경·물가·변동성·원금 손실·투자한도 등을 모두 반영한 확정 세후금액이 아닙니다. 증권사 이전 자체로 높은 수익률이 보장되지는 않습니다.')
+
+
 # ===== First-visit password gate (same APP_PASSWORD secret as HanaV Trading) =====
 def _app_password_from_secrets() -> str | None:
     """Fail closed if the deployment has no valid secret configured."""
@@ -1029,11 +1315,14 @@ with st.sidebar:
 st.title('HanaV Pension Tax Lab')
 st.caption('2026년 세법 기반 퇴직소득세·IRP 연금수령 비교 | 내부 상담용 시뮬레이터 (실제 원천징수 확정세액 아님)')
 with st.sidebar:
-    choice = st.radio('업무 메뉴', ['퇴직·연금 유치 상담', '🧮 금융계산기 · CPT / 운용비교'],
+    choice = st.radio('업무 메뉴', ['퇴직·연금 유치 상담', '🧮 금융계산기 · CPT / 운용비교', '📄 IRP 유치 제안서'],
                       key='hv_main_menu', label_visibility='visible')
     st.divider()
 if choice.startswith('🧮'):
     _tvm_draw_page()
+    st.stop()
+if choice.startswith('📄'):
+    _proposal_draw_page()
     st.stop()
 
 
