@@ -569,6 +569,35 @@ _kpis([
     ('올해 연금수령한도', '한도 제한 없음' if count and count >= 11 else _short_krw(limit),
      '법정 한도 제한 없음' if count and count >= 11 else f'{limit:,}원'),
 ], green_last=True)
+# A click (not a hover) opens the exact statutory calculation alongside
+# the displayed limit. Match the data and year count used by pension_limit().
+with st.popover('ⓘ 올해 연금수령한도 계산식 보기'):
+    st.markdown('#### 연금수령한도 계산 과정')
+    st.markdown(f'**최초 연금수령 요건 충족일:** {qualifying:%Y.%m.%d}')
+    first_count = 6 if legacy else 1
+    if count is not None:
+        st.markdown(
+            f'**수령연차 계산:** {qualifying.year}년을 {first_count}년차로 기산'
+            f' → {year}년은 **{first_count} + ({year} − {qualifying.year})'
+            f' = {count}년차**'
+        )
+    else:
+        st.markdown('**수령연차:** 아직 최초 연금수령 요건 충족 전입니다.')
+    st.markdown(f'**한도산정용 평가액:** {evaluated:,}원')
+    if count is None:
+        st.warning(f'{year}년은 최초 연금수령 가능연도({qualifying.year}년) 이전이므로 한도를 산출하지 않습니다.')
+    elif count >= 11:
+        st.success('**11년차 이상: 연금수령한도의 법정 제한 없음**')
+        st.caption('단, 계좌의 실제 잔액을 초과하여 인출할 수는 없습니다.')
+    else:
+        st.markdown('**법정 계산식**')
+        st.markdown('연금수령한도 = 한도산정용 평가액 ÷ (11 − 한도 산정 연차) × 120%')
+        st.markdown(
+            f'**숫자 대입:** {evaluated:,}원 ÷ (11 − {count}) × 1.2'
+            f' = **{limit:,}원**'
+        )
+        st.caption('최종 금액은 원 단위로 표시하며, 계산 결과의 원 미만은 절사합니다.')
+    st.caption('한도 계산용 연차는 이연퇴직소득세 감면에 쓰이는 실제 연금수령연차와 별개입니다.')
 if legacy and plan_type in ('DB', 'IRP') and db_full and plan_joined < date(2013,3,1):
     st.info('2013.3.1 이전 DB 가입 및 퇴직소득 전액 신규 IRP 이체 확인에 따른 특례를 적용했습니다.')
 elif legacy:
