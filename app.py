@@ -324,10 +324,23 @@ with st.sidebar:
     st.subheader('고객·퇴직연금 정보')
     birth = st.date_input('생년월일', value=date(1966, 6, 1), min_value=date(1920,1,1), max_value=date(2010,12,31))
     plan_type = st.selectbox('퇴직연금 종류', ['DB', 'DC', 'IRP'])
-    plan_joined = st.date_input('퇴직연금제도 가입일', value=date(2010,1,1), min_value=date(1970,1,1), max_value=date(2026,12,31))
+    plan_joined = st.date_input('기존 퇴직연금제도 가입일', value=date(2010,1,1), min_value=date(1970,1,1), max_value=date(2026,12,31),
+                                help='현재 수령계좌가 IRP라도 최초 DB형 퇴직연금 가입일을 입력합니다. 가입이력을 확인한 날짜를 사용하세요.')
     account_open = st.date_input('연금계좌 가입일/IRP 개설일', value=date(2026,1,1), min_value=date(1970,1,1), max_value=date(2026,12,31))
-    db_full = st.checkbox('2013.3.1 이전 DB 가입자로서 퇴직소득 전액을 신규 IRP에 이체', value=True if plan_type=='DB' and plan_joined < date(2013,3,1) else False,
-                          disabled=plan_type!='DB')
+    # IRP is the receiving-account type, so it must NOT disable a prior-DB
+    # full-transfer confirmation. Do not auto-check based on the date alone.
+    db_full = st.checkbox(
+        '2013.3.1 이전 DB 가입 + 퇴직소득 전액 신규 IRP 이체',
+        value=False,
+        disabled=plan_type == 'DC',
+        key='hv_legacy_db_full_transfer',
+        help='현재 유형이 IRP라도, 과거 DB형 가입자이고 퇴직소득 전액을 신규 IRP로 이체한 사실이 확인되면 체크합니다. '
+             'DB 최초 가입일이 2013.3.1 이후라면 체크해도 특례가 적용되지 않습니다.',
+    )
+    if plan_type == 'DC':
+        db_full = False
+    if db_full and plan_joined >= date(2013,3,1):
+        st.warning('DB 최초 가입일이 2013.3.1 이후여서 이전 DB 가입자 특례를 적용할 수 없습니다.')
     st.divider()
     st.subheader('근속·퇴직소득')
     entry = st.date_input('입사일', value=date(2007,1,1), min_value=date(1950,1,1), max_value=date(2026,12,31))
@@ -381,7 +394,11 @@ with col_c:
                                     help='본 프로토타입은 이전 수령분 모두 한도를 소진했다고 가정합니다.')
     new_withdrawal = st.number_input('이번/남은 연도 수령 계획액(원)', min_value=0, value=50_000_000, step=1_000_000)
 
-legacy = legacy_eligible(account_open, plan_type, plan_joined, db_full)
+# Current account type IRP can still carry qualifying *prior DB* history.
+# retirement_core.legacy_eligible only understands a DB current-plan flag,
+# so explicitly include the IRP receiving-account case here (app.py-only fix).
+legacy = (legacy_eligible(account_open, plan_type, plan_joined, db_full)
+          or (plan_type == 'IRP' and db_full and plan_joined < date(2013,3,1)))
 qualifying = first_eligible_date(birth, account_open, deferred_retirement_funds=def_balance>0)
 limit, count = pension_limit(evaluated, qualifying.year, int(year), legacy)
 eligible_now = (year >= qualifying.year and planned_date >= qualifying)
@@ -398,8 +415,8 @@ _kpis([
     ('올해 연금수령한도', '한도 제한 없음' if count and count >= 11 else _short_krw(limit),
      '법정 한도 제한 없음' if count and count >= 11 else f'{limit:,}원'),
 ], green_last=True)
-if legacy and plan_type == 'DB' and db_full:
-    st.info('2013.3.1 이전 DB 가입 + 퇴직소득 전액 신규 IRP 이체 특례를 적용했습니다.')
+if legacy and plan_type in ('DB', 'IRP') and db_full and plan_joined < date(2013,3,1):
+    st.info('2013.3.1 이전 DB 가입 및 퇴직소득 전액 신규 IRP 이체 확인에 따른 특례를 적용했습니다.')
 elif legacy:
     st.info('2013.3.1 이전 연금계좌 가입 경과규정을 적용했습니다.')
 else:
