@@ -844,6 +844,93 @@ def _direct_retirement_gross_for_net(net_cash: int, retirement_income: int,
     return lo
 
 
+# ===== Advisor comparison helper: old pension savings plus new IRP =====
+def _old_pension_savings_tax(amount: int, non_deducted_basis: int,
+                             annual_pension_room: int, age: int,
+                             other_pension_taxable_year: int=0) -> dict:
+    """Tax estimate for an OLD pension savings account, NOT for deferred severance.
+
+    Excluded (non-deducted) contributions are drawn first, and do NOT exhaust
+    the statutory pension withdrawal room. The remaining taxable portion is
+    eligible for age-bracket pension tax inside the room; outside = other income.
+    All amounts are independent of the new retirement-income IRP tax lot.
+    This is an illustration: provider's actual tax-source ledger is definitive.
+    """
+    if min(amount, non_deducted_basis, annual_pension_room, age, other_pension_taxable_year) < 0:
+        raise ValueError('연금저축 재원과 인출금액을 확인하세요.')
+    excluded = min(int(amount), int(non_deducted_basis))
+    taxable = int(amount) - excluded
+    pension_taxable = min(taxable, int(annual_pension_room))
+    nonpension_taxable = taxable - pension_taxable
+    p_rate = age_pension_tax_rate(age)
+    pension_national = floor_krw(Decimal(pension_taxable)*p_rate)
+    pension_local = floor_krw(Decimal(pension_national)*Decimal('0.1'))
+    other_national = floor_krw(Decimal(nonpension_taxable)*Decimal('0.15'))
+    other_local = floor_krw(Decimal(other_national)*Decimal('0.1'))
+    # The age rate above is withholding. For ordinary taxable pension savings,
+    # > 15m won in annual private-pension income requires election of comprehensive
+    # taxation or 16.5% separate taxation. Conservatively model the latter,
+    # across the WHOLE taxable pension amount (not just the excess).
+    withheld_pension = pension_national+pension_local
+    threshold_exceeded = (int(other_pension_taxable_year)+pension_taxable > 15_000_000)
+    if threshold_exceeded:
+        # 15% national income tax + 10% local tax on that tax
+        pension_national = floor_krw(Decimal(pension_taxable)*Decimal('0.15'))
+        pension_local = floor_krw(Decimal(pension_national)*Decimal('0.1'))
+    total_tax = pension_national+pension_local+other_national+other_local
+    return {
+        'gross':int(amount), 'excluded':excluded,
+        'pension_taxable':pension_taxable, 'nonpension_taxable':nonpension_taxable,
+        'pension_tax':pension_national+pension_local,
+        'withheld_pension_tax':withheld_pension,
+        'pension_over_15m':threshold_exceeded,
+        'final_tax_extra':pension_national+pension_local-withheld_pension,
+        'nonpension_tax':other_national+other_local,
+        'total_tax':total_tax, 'net':int(amount)-total_tax,
+    }
+
+
+def _optimize_combined_funding(net_goal: int, *, old_balance: int,
+                               old_excluded: int, old_room: int, old_age: int,
+                               new_retirement_balance: int, retirement_national_tax: int,
+                               retirement_pension_limit: int, calendar_year: int,
+                               other_pension_taxable_year: int=0):
+    """Minimum *current* tax (not minimum lifetime tax), conserving annual room.
+
+    Search discrete 250k-won legacy withdrawals plus exact endpoints; each
+    candidate gross-ups the new IRP withdrawal to the same wedding cash.
+    No post-2013 account is moved into a pre-2013 pension savings account.
+    """
+    if net_goal < 0:
+        raise ValueError('목표 실수령액은 음수일 수 없습니다.')
+    # Tax-exempt basis is not included in the pension-withdrawal ceiling.
+    max_old = min(int(old_balance), int(old_excluded)+int(old_room))
+    candidates = set(range(0, max_old+1, 250_000))
+    candidates.add(max_old)
+    candidates.add(min(max_old, int(old_excluded)))
+    best = None
+    for old_gross in sorted(candidates):
+        old_result = _old_pension_savings_tax(old_gross, old_excluded, old_room, old_age,
+                                              other_pension_taxable_year)
+        if old_result['net'] > net_goal:
+            continue
+        irp_needed = _gross_for_net_cash(
+            net_goal-old_result['net'], new_retirement_balance,
+            retirement_national_tax, retirement_pension_limit, calendar_year)
+        if irp_needed is None:
+            continue
+        new_draw = _new_retirement_withdrawal_amount(
+            irp_needed, new_retirement_balance, retirement_national_tax,
+            retirement_pension_limit, calendar_year, 1)
+        combined_tax = old_result['total_tax']+new_draw.total_tax
+        result = {'old':old_result,'irp_gross':irp_needed,'irp_draw':new_draw,
+                  'combined_tax':combined_tax,'net':old_result['net']+new_draw.total_net}
+        if (best is None or (result['combined_tax'],old_gross) <
+                         (best['combined_tax'],best['old']['gross'])):
+            best=result
+    return best
+
+
 st.subheader('🎯 고액 퇴직금 유치 상담 · 은행 예금 / 은행 IRP / 하나증권 IRP')
 st.caption('상담 시나리오별 당장의 세금, 연금계좌에 남는 자금, 금융회사별 운용조건을 분리해 비교합니다.')
 with st.container(border=True):
@@ -933,6 +1020,17 @@ with st.container(border=True):
                 direct_lump_gross, original_retirement, ret_tax.income_tax) if direct_lump_gross is not None else None
             direct_lump_irp_rest = (original_retirement-direct_lump_gross
                                     if direct_lump_gross is not None else None)
+            # Lead the consultation with the defensible recommendation.
+            st.markdown('##### 이번 고객 1차 유치 결론')
+            st.info(
+                f'**H은행 일반예금으로 퇴직금 전액 현금화** 시 퇴직소득세 **{full_lump:,}원**. '
+                f'**하나증권 신규 IRP 전액 이체 후 결혼자금만 인출** 시 이번 인출세금 '
+                f'**{draw.total_tax:,}원**, IRP 잔여원금(세전) **{deferral_remaining_principal:,}원**. '
+                f'즉시 납부 세금 차이 **{actual_immediate_tax_deferred:,}원**에는 '
+                '향후 납부할 세금의 과세이연분이 포함됩니다. '
+                '**H은행 IRP로 같은 전략을 실행하면 세법상 세금 차이는 0원**입니다. '
+                '아래 ⑥에서 기존 연금저축 활용, 수수료와 수익률까지 반영한 추천안을 확인하세요.'
+            )
             st.markdown(f'**퇴직 후 신규 IRP 가정:** {compare_year}년 **{limit_year}년차**, '
                         f'연금수령한도 **{_short_krw(annual_limit)}** · 예상 퇴직소득세 '
                         f'**{_short_krw(full_lump)}** (국세+지방세)')
@@ -1084,6 +1182,201 @@ with st.container(border=True):
             st.info('**설명 멘트:** “퇴직금 전액을 일반예금으로 옮기기 전에 IRP로 세금을 이연한 뒤, '
                     '자녀 결혼자금만 인출하는 방식을 검토할 수 있습니다. 하나증권이 은행 IRP보다 세율이 낮은 것은 아닙니다. '
                     '동일한 절세 구조에서 원금보장 상품과 운용상품 선택, 비용과 사후 관리를 함께 비교해 드리겠습니다.”')
+            # ===== ⑥ Sales recommendation with numeric, apples-to-apples tax results =====
+            st.markdown('##### ⑥ 추천 인출 전략 · H은행 대비 하나증권 유치 결론')
+            st.caption('서로 다른 경로의 세금 차이와 금융회사별 세금 차이를 구분해 자동으로 결론을 제시합니다.')
+            aa,bb,cc=st.columns(3)
+            with aa:
+                old_partial_assumed=st.checkbox(
+                    '2009년 연금저축 부분인출 가능 가정', value=True,
+                    key='hv_strategy_old_partial',
+                    help='약관 및 현재 연금개시 상태에 따라 부분인출이 불가능할 수 있습니다. '
+                         '체크 시 조건부 시나리오로만 계산합니다.')
+            with bb:
+                old_tax_exempt=int(st.number_input(
+                    '연금저축 세액공제 받지 않은 원금(원)',min_value=0,
+                    max_value=int(existing_savings),value=0,step=1_000_000,
+                    key='hv_strategy_old_exempt',
+                    help='원장으로 확인한 금액만 넣습니다. 모르면 0원으로 두고 과세대상으로 보수적 가정합니다.'))
+            with cc:
+                old_taken_ytd=int(st.number_input(
+                    '올해 연금저축 기존 인출액(원)',min_value=0,
+                    value=0,step=1_000_000,key='hv_strategy_old_ytd',
+                    help='이미 같은 해 연금으로 인출해 한도를 사용한 금액입니다. '
+                         '과세제외금액 등의 한도불산입 인출은 금융기관 원장 기준으로 조정하세요.'))
+            other_pension_annual=int(st.number_input(
+                '올해 다른 사적연금 과세대상 수령액(원) · 퇴직소득 연금수령분 제외',
+                min_value=0,value=0,step=1_000_000,key='hv_strategy_other_pension',
+                help='연금저축/IRP의 세액공제 납입분과 운용수익 중 정상 연금수령한 과세재원. '
+                     '이연퇴직소득을 연금으로 받는 금액은 1,500만원 기준에서 제외됩니다.'))
+            old_draw_date=st.date_input(
+                '결혼자금 인출예정일(연금저축 연령별 세율 확인용)',
+                value=date(int(compare_year),10,30),min_value=date(2026,1,1),
+                max_value=date(2050,12,31),key='hv_strategy_draw_date')
+            pension_room=max(0,int(old_lim)-old_taken_ytd)
+            if old_draw_date.year != int(compare_year):
+                st.warning('인출예정일의 연도와 퇴직금 인출 예정 연도가 다릅니다. 같은 연도로 지정해야 조합 전략을 비교합니다.')
+            else:
+                old_age=age_on(birth,old_draw_date)
+                old_funds= int(existing_savings) if old_partial_assumed else 0
+                best_combo=_optimize_combined_funding(
+                    cash_for_wedding,old_balance=old_funds,
+                    old_excluded=old_tax_exempt if old_partial_assumed else 0,
+                    old_room=pension_room,old_age=old_age,
+                    new_retirement_balance=original_retirement,
+                    retirement_national_tax=ret_tax.income_tax,
+                    retirement_pension_limit=annual_limit,
+                    calendar_year=int(compare_year),
+                    other_pension_taxable_year=old_taken_ytd+other_pension_annual)
+                if best_combo is None:
+                    st.error('지정된 목표 현금액을 충족할 수 없습니다. 계좌별 잔액 및 세후 목표액을 조정하세요.')
+                else:
+                    old_draw=best_combo['old']
+                    new_draw=best_combo['irp_draw']
+                    blended_tax=best_combo['combined_tax']
+                    blended_new_irp_left=original_retirement-best_combo['irp_gross']
+                    blended_old_left=existing_savings-old_draw['gross']
+                    ordinary_reduction=full_lump-blended_tax
+                    vs_single_irp=draw.total_tax-blended_tax
+                    # H은행이 똑같은 2계좌 전략을 실행하는 경우에는 세금차이가 없습니다.
+                    st.markdown('**결론 A — 기존 계획이 “퇴직금 전액 현금화 → H은행 일반예금”이라면**')
+                    _kpis([
+                        _won_kpi('H은행 일반예금 · 퇴직소득세(전액 과세)',full_lump),
+                        _won_kpi('하나증권 IRP 단독 · 해당 연도 총세금 추정',draw.total_tax),
+                        _won_kpi('연금저축+하나증권 IRP 조합 · 해당 연도 총세금 추정',blended_tax),
+                        _won_kpi('일시금 전액 과세 대비 해당 연도 총세금 추정 감소',ordinary_reduction),
+                    ],green_last=True)
+                    st.success(
+                        f'**계산상 제안 경로:** 기존 연금저축 **{_short_krw(old_draw["gross"])}**에서 '
+                        f'세후 **{_short_krw(old_draw["net"])}** 확보 + 하나증권 신규 IRP '
+                        f'**{_short_krw(best_combo["irp_gross"])}** 인출(세후 '
+                        f'**{_short_krw(new_draw.total_net)}**) → 결혼자금 '
+                        f'**{_short_krw(best_combo["net"])}** 확보. '
+                        '단, 연금저축 부분인출 가능·재원별 세금 가정이 충족될 때의 조건부 제안입니다.'
+                    )
+                    _kpis([
+                        _won_kpi('신규 IRP에 남는 퇴직금 · 세전',blended_new_irp_left),
+                        _won_kpi('기존 연금저축 잔액 · 세전',blended_old_left),
+                        _won_kpi('기존 H은행 IRP 잔액 · 세전(미인출)',existing_bank_irp),
+                        _won_kpi('IRP 단독 인출 대비 올해 총세금 추정 차이',vs_single_irp),
+                    ])
+                    st.markdown('**결론 B — H은행에서도 동일하게 IRP를 활용한다면**')
+                    st.markdown(
+                        '**H은행 IRP와 하나증권 IRP의 세법상 납부세금 차이: 0원.** '
+                        f'동일한 연금저축+IRP 조합의 현재 납부세금은 양사 모두 '
+                        f'**{blended_tax:,}원**으로 계산됩니다. '
+                        '하나증권의 우위는 실제 약정금리, 수수료, 상품 선택과 서비스 비교로 입증해야 합니다.'
+                    )
+                    difference=hana_proj-bank_proj
+                    if difference>0:
+                        st.info(f'입력한 수익률·비용 가정대로라면 {two_years}년 후 '
+                                f'하나증권 IRP 평가액이 H은행보다 **{difference:,}원** 높습니다. '
+                                '이는 세금 차이가 아니라 운용 가정 차이이며 세전·미래 과세 미반영입니다.')
+                    elif difference<0:
+                        st.warning(f'현재 입력 가정에서는 {two_years}년 후 H은행 IRP가 '
+                                   f'**{abs(difference):,}원** 유리합니다. '
+                                   '하나증권 이전을 더 유리하다고 결론 낼 근거가 아직 없습니다.')
+                    else:
+                        st.info('현재 수익률과 수수료 가정으로는 하나증권 IRP와 H은행 IRP 사이의 '
+                                '운용금액 차이가 0원입니다. 실제 상품 금리와 계약별 비용 입력 후 판단하세요.')
+                    st.markdown('**고객 상담용 전략 비교표 — 결혼자금 세후 실수령액 동일**')
+                    breakdown_rows=[
+                        {'수령·운용 전략':'H은행 일반예금 · 전액 일시금',
+                         '올해 총세금 추정(원)':full_lump,
+                         '신규퇴직금 잔액(원)':bank_lump_bank_balance,
+                         '기존 연금저축 잔액(원)':existing_savings,
+                         '기존 H은행 IRP 잔액(원)':existing_bank_irp,
+                         '세금 성격':'퇴직금 전액 과세 완료'},
+                        {'수령·운용 전략':'H은행 IRP · 퇴직금만 부분인출',
+                         '올해 총세금 추정(원)':draw.total_tax,
+                         '신규퇴직금 잔액(원)':deferral_remaining_principal,
+                         '기존 연금저축 잔액(원)':existing_savings,
+                         '기존 H은행 IRP 잔액(원)':existing_bank_irp,
+                         '세금 성격':'나머지 퇴직금 이연세금 잔존'},
+                        {'수령·운용 전략':'하나증권 IRP · 퇴직금만 부분인출',
+                         '올해 총세금 추정(원)':draw.total_tax,
+                         '신규퇴직금 잔액(원)':deferral_remaining_principal,
+                         '기존 연금저축 잔액(원)':existing_savings,
+                         '기존 H은행 IRP 잔액(원)':existing_bank_irp,
+                         '세금 성격':'나머지 퇴직금 이연세금 잔존'},
+                        {'수령·운용 전략':'하나증권 IRP + 기존 연금저축 조합',
+                         '올해 총세금 추정(원)':blended_tax,
+                         '신규퇴직금 잔액(원)':blended_new_irp_left,
+                         '기존 연금저축 잔액(원)':blended_old_left,
+                         '기존 H은행 IRP 잔액(원)':existing_bank_irp,
+                         '세금 성격':'두 연금계좌의 세금 + 향후 이연세금'},
+                        {'수령·운용 전략':'H은행 IRP + 기존 연금저축 동일 조합',
+                         '올해 총세금 추정(원)':blended_tax,
+                         '신규퇴직금 잔액(원)':blended_new_irp_left,
+                         '기존 연금저축 잔액(원)':blended_old_left,
+                         '기존 H은행 IRP 잔액(원)':existing_bank_irp,
+                         '세금 성격':'은행·증권사 IRP 세제 동일'},
+                    ]
+                    st.dataframe(pd.DataFrame(breakdown_rows),hide_index=True,use_container_width=True)
+                    with st.expander('ⓘ 최적 조합의 인출·과세 계산식과 전제 확인'):
+                        st.markdown('**기존 연금저축 한도 및 과세(2009년 가입)**')
+                        st.markdown(f'올해 기존 연금저축 한도 **{old_lim:,}원** − 이미 인출한 연금한도 사용액 '
+                                    f'**{old_taken_ytd:,}원** = **{pension_room:,}원** '
+                                    f'(한도 외 과세제외 원금은 별도 분리).')
+                        st.markdown(f'기존 연금저축 인출 **{old_draw["gross"]:,}원** = '
+                                    f'과세제외 원금 **{old_draw["excluded"]:,}원** + '
+                                    f'한도 내 과세대상 **{old_draw["pension_taxable"]:,}원** + '
+                                    f'한도 초과 **{old_draw["nonpension_taxable"]:,}원**.')
+                        if old_draw['pension_over_15m']:
+                            st.warning('**연간 사적연금소득 1,500만원 초과:** 한도 내 연금저축 인출분의 '
+                                       '원천징수는 연령별 세율이지만, 여기서는 종합과세 대신 '
+                                       '16.5% 선택 분리과세를 가정해 연간 최종세액에 반영했습니다. '
+                                       '다른 종합소득에 따라 종합과세가 유리할 수 있으므로 별도 검산이 필요합니다.')
+                        st.markdown(f'{old_age}세 기준 한도 내 과세재원 원천징수세율 '
+
+                                    f'**{float(age_pension_tax_rate(old_age))*110:.2f}% (지방세 포함 개산)** · '
+                                    '한도 외 과세재원 16.5%(지방세 포함).')
+                        st.markdown(f'연금저축 연금수령분 원천징수세액 '
+                                    f'**{old_draw["withheld_pension_tax"]:,}원**, '
+                                    f'1,500만원 초과에 따른 연말 과세액 증가분(16.5% 선택 시) '
+                                    f'**{old_draw["final_tax_extra"]:,}원**.')
+                        st.markdown(f'연금저축 세금 = 한도 내 **{old_draw["pension_tax"]:,}원** '
+                                    f'+ 한도 초과 **{old_draw["nonpension_tax"]:,}원** '
+                                    f'= **{old_draw["total_tax"]:,}원**. '
+                                    f'실수령액 {old_draw["gross"]:,} − {old_draw["total_tax"]:,} '
+                                    f'= **{old_draw["net"]:,}원**.')
+                        st.markdown('**신규 퇴직소득 IRP 인출**')
+                        st.markdown(f'필요 세후 결혼자금 **{cash_for_wedding:,}원** − '
+                                    f'기존 연금저축 실수령액 **{old_draw["net"]:,}원** = '
+                                    f'IRP에서 세후 **{new_draw.total_net:,}원** 필요.')
+                        st.markdown(f'IRP 세전 **{best_combo["irp_gross"]:,}원** 인출 = '
+                                    f'연금수령 인정액 **{new_draw.pension_amount:,}원** + '
+                                    f'초과액 **{new_draw.nonpension_amount:,}원**.')
+                        for taxrow in new_draw.rows:
+                            st.markdown(f'{taxrow.treatment} {taxrow.gross:,}원 × '
+                                        f'국세 유효세율 {taxrow.income_tax_rate_percent:.4f}% '
+                                        f'→ 국세 {taxrow.income_tax:,}원 + 지방소득세 '
+                                        f'{taxrow.local_income_tax:,}원 = **{taxrow.total_tax:,}원**')
+                        st.markdown(f'IRP 인출세금 **{new_draw.total_tax:,}원** + '
+                                    f'연금저축 인출세금 **{old_draw["total_tax"]:,}원** '
+                                    f'= 이번 인출 합계세금 **{blended_tax:,}원**.')
+                        st.markdown(f'일시금 전액 과세 **{full_lump:,}원** − 올해 총세금 추정 '
+                                    f'**{blended_tax:,}원** = **{ordinary_reduction:,}원** '
+                                    '(이연 세금이 포함된 **해당 연도 세금 부담액 차이**, 영구 절세액 아님).')
+                        st.caption('최적화 기준은 “연금저축 한도 내 인출만 사용하면서 올해 총세금 추정 최소화”입니다. '
+                                   '250,000원 간격으로 비교한 추정치이며 평생 누적 세금의 최소화는 아닙니다. '
+                                   '노후 연금 고갈, 계좌별 유동성 제약, 기 수령·기납부세금 원장은 반영하지 않았습니다. ' 
+                                   '다른 종합소득과 연금소득공제에 따른 실제 종합과세는 계산하지 않았습니다.')
+                    st.warning('**계좌 이전 유의:** 2021년 가입 IRP를 2009년 가입 연금저축으로 '
+                               '옮겨 2013년 이전 가입 특례를 적용하는 방식은 정상적인 비과세 계좌이체로 '
+                               '가정하지 않습니다. 일반적으로 2013년 이후 가입 계좌 → 이전 가입 계좌로의 '
+                               '이체는 과세 문제가 있어 별도 확인이 필요합니다. '
+                               'H은행 IRP 4천만원은 재원(개인납입·이연퇴직소득) 확인 후 '
+                               '동일 계좌유형의 금융회사 간 **전액 이전** 가능 여부와 승계정보를 확인하십시오.')
+                    st.warning('**조건부 세액 주의:** 기존 연금저축 7천만원 중 세액공제 미신청 원금·'
+                               '과세재원·연금개시 상태·부분수령 가능 여부를 알 수 없습니다. '
+                               '여기서는 미확인 금액을 과세재원으로 계산하고 연간 1,500만원 초과 시 16.5% 선택 분리과세를 가정했습니다. '
+                               '같은 절세 조합을 H은행에서도 실행할 수 있으므로 하나증권만의 독점 절세혜택이 아닙니다.')
+                    st.download_button('추천 인출전략·양사비교표 CSV 다운로드',
+                        pd.DataFrame(breakdown_rows).to_csv(index=False).encode('utf-8-sig'),
+                        file_name=f'HanaV_추천전략_H은행대비_{compare_year}.csv',
+                        mime='text/csv',key='hv_strategy_csv')
+
             st.download_button(
                 '상담 시나리오 비교표 CSV 다운로드',
                 display.to_csv(index=False).encode('utf-8-sig'),
