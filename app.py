@@ -1,5 +1,7 @@
 """HanaV Pension Tax Lab - Streamlit consultation prototype, Oct 2026."""
 from datetime import date
+from decimal import Decimal
+from html import escape
 import hashlib
 import hmac
 import pandas as pd
@@ -7,6 +9,7 @@ import streamlit as st
 from retirement_core import (
     age_on, actual_receipt_year_from_history, calculate_withdrawal, estimate_retirement_tax, first_eligible_date,
     legacy_eligible, pension_limit, service_years, floor_krw,
+    converted_pay_deduction, income_tax_on_base,
 )
 
 st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout='wide')
@@ -167,6 +170,42 @@ st.markdown('''<style>
   .hv-kpi-detail{font-size:.7rem}
   .stApp h1{font-size:1.7rem}
 }
+
+/* Hover/focus explanation table: replaces Streamlit's pale dataframe inside expander. */
+.hv-calc-intro{color:#C9DEE8;font-size:.86rem;margin:2px 0 12px}
+.hv-calc-scroll{width:100%;overflow:visible}
+.hv-calc-table{border-collapse:separate;border-spacing:0;width:100%;
+  background:#152939;border:1px solid #496E81;border-radius:11px;
+  color:#F7FBFF;font-variant-numeric:tabular-nums}
+.hv-calc-table th{background:#20394B;color:#EBF8FE;text-align:left;
+  font-size:.86rem;padding:12px 14px;border-bottom:1px solid #496E81}
+.hv-calc-table th:last-child{text-align:right;min-width:142px}
+.hv-calc-table td{padding:11px 14px;border-bottom:1px solid #355369;
+  vertical-align:top;font-size:.92rem;line-height:1.6}
+.hv-calc-table tr:last-child td{border-bottom:0}
+.hv-calc-row:hover,.hv-calc-row:focus,.hv-calc-row:focus-within{
+  background:#234559;outline:0}
+.hv-calc-label{font-weight:730;color:#FFF}
+.hv-calc-help{margin-left:8px;color:#64F5C7;font-size:.82rem;
+  cursor:help;border:1px solid #28896F;border-radius:999px;
+  display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center}
+.hv-calc-help:focus{outline:2px solid #64F5C7;outline-offset:2px}
+.hv-calc-amount{text-align:right;white-space:nowrap;color:#E7FFF7;font-weight:740}
+.hv-calc-steps{display:none;margin-top:9px;background:#102636;
+  border:1px solid #3E7880;border-left:3px solid #48E4AD;
+  padding:11px 13px;border-radius:8px;line-height:1.65;
+  font-size:.85rem;color:#E5F3F9;overflow-wrap:anywhere;word-break:keep-all}
+.hv-calc-row:hover .hv-calc-steps,
+.hv-calc-row:focus .hv-calc-steps,
+.hv-calc-row:focus-within .hv-calc-steps{display:block}
+.hv-calc-formula{color:#91F6D3;font-weight:760;margin-bottom:5px}
+.hv-calc-numbers{color:#FFFFFF}
+.hv-calc-note{color:#BCD7E3;font-size:.79rem;margin-top:5px}
+@media(max-width:600px){
+ .hv-calc-table th,.hv-calc-table td{padding:10px 8px;font-size:.8rem}
+ .hv-calc-table th:last-child{min-width:102px}
+ .hv-calc-steps{font-size:.78rem;padding:9px}
+}
 </style>''', unsafe_allow_html=True)
 
 
@@ -208,6 +247,125 @@ def _kpis(items: list[tuple[str, str, str]], *, green_last: bool = False) -> Non
 
 def _won_kpi(title: str, amount: int) -> tuple[str, str, str]:
     return title, _short_krw(amount), f'{int(amount):,}원'
+
+
+
+def _retirement_tax_steps(tax, non_taxable: int, years: int):
+    """Mirror retirement_core's math for explanatory hovers (do not change tax logic).
+
+    Intermediate values are recomputed with Decimal and ONLY floored for display;
+    rounding displayed intermediate fields first would cause occasional 1-won errors.
+    """
+    y = int(years)
+    taxable = int(tax.gross) - int(non_taxable)
+    net_after_service = max(0, taxable - int(tax.service_deduction))
+    exact_pay = Decimal(net_after_service) * Decimal(12) / Decimal(y)
+    exact_deduction = converted_pay_deduction(exact_pay)
+    exact_base = max(Decimal(0), exact_pay - exact_deduction)
+    exact_converted_tax = income_tax_on_base(exact_base)
+
+    if y <= 5:
+        service_formula = f'{y}년 × 1,000,000원'
+    elif y <= 10:
+        service_formula = f'5,000,000원 + ({y}년 − 5년) × 2,000,000원'
+    elif y <= 20:
+        service_formula = f'15,000,000원 + ({y}년 − 10년) × 2,500,000원'
+    else:
+        service_formula = f'40,000,000원 + ({y}년 − 20년) × 3,000,000원'
+
+    if exact_pay <= 8_000_000:
+        converted_ded_formula = '환산급여 800만원 이하: 환산급여 전액 공제'
+        converted_ded_calc = f'{exact_pay:,.2f}원 × 100%'
+    elif exact_pay <= 70_000_000:
+        converted_ded_formula = '800만원 + (환산급여 − 800만원) × 60%'
+        converted_ded_calc = f'8,000,000 + ({exact_pay:,.2f} − 8,000,000) × 60%'
+    elif exact_pay <= 100_000_000:
+        converted_ded_formula = '4,520만원 + (환산급여 − 7,000만원) × 55%'
+        converted_ded_calc = f'45,200,000 + ({exact_pay:,.2f} − 70,000,000) × 55%'
+    elif exact_pay <= 300_000_000:
+        converted_ded_formula = '6,170만원 + (환산급여 − 1억원) × 45%'
+        converted_ded_calc = f'61,700,000 + ({exact_pay:,.2f} − 100,000,000) × 45%'
+    else:
+        converted_ded_formula = '1억 5,170만원 + (환산급여 − 3억원) × 35%'
+        converted_ded_calc = f'151,700,000 + ({exact_pay:,.2f} − 300,000,000) × 35%'
+
+    tax_rates = [
+        (14_000_000, '6%', 0),
+        (50_000_000, '15%', 1_260_000),
+        (88_000_000, '24%', 5_760_000),
+        (150_000_000, '35%', 15_440_000),
+        (300_000_000, '38%', 19_940_000),
+        (500_000_000, '40%', 25_940_000),
+        (1_000_000_000, '42%', 35_940_000),
+        (Decimal('Infinity'), '45%', 65_940_000),
+    ]
+    rate, quick_deduction = next((rate, credit) for ceiling, rate, credit in tax_rates
+                                 if exact_base <= ceiling)
+    converted_tax_note = f'환산산출세액: {exact_base:,.2f}원 × {rate} − {quick_deduction:,}원 = {exact_converted_tax:,.2f}원'
+
+    # label, result, formula, number substitution, extra note
+    return [
+        ('퇴직급여 총액', tax.gross,
+         '퇴직 시 지급받는 퇴직급여의 총합',
+         f'퇴직급여 {tax.gross:,}원 − 비과세 {non_taxable:,}원 = 과세대상 {taxable:,}원',
+         '이후 계산은 비과세 퇴직소득을 제외한 금액에 적용합니다.'),
+        ('근속연수공제', tax.service_deduction,
+         '근속연수에 따라 구간별 누진 공제액 산출',
+         f'{service_formula} = {tax.service_deduction:,}원',
+         f'적용 근속연수: {y}년 (세법상 근속연수 기준)'),
+        ('환산급여', tax.converted_pay,
+         'MAX(0, 과세대상 퇴직소득 − 근속연수공제) × 12 ÷ 근속연수',
+         f'MAX(0, {taxable:,} − {tax.service_deduction:,}) × 12 ÷ {y} = {tax.converted_pay:,}원',
+         f'원 단위 표시 전 실제 계산값: {exact_pay:,.2f}원'),
+        ('환산급여공제', tax.converted_pay_deduction,
+         converted_ded_formula,
+         f'{converted_ded_calc} = {tax.converted_pay_deduction:,}원',
+         '환산급여 원미만 미절사 계산값을 사용하며, 최종 결과는 원 단위로 표시합니다.'),
+        ('환산과세표준', tax.converted_tax_base,
+         'MAX(0, 환산급여 − 환산급여공제)',
+         f'{exact_pay:,.2f} − {exact_deduction:,.2f} = {tax.converted_tax_base:,}원',
+         f'원 단위 표시 전 실제 계산값: {exact_base:,.2f}원'),
+        ('퇴직소득세', tax.income_tax,
+         '(환산과세표준 × 적용세율 − 누진공제) × 근속연수 ÷ 12',
+         f'{converted_tax_note} → × {y} ÷ 12 = {tax.income_tax:,}원',
+         '국세 기준 금액이며, 원 미만 절사 결과입니다.'),
+        ('지방소득세', tax.local_income_tax,
+         '퇴직소득세(국세) × 10%',
+         f'{tax.income_tax:,}원 × 10% = {tax.local_income_tax:,}원',
+         '지방소득세 원 미만 절사 결과입니다.'),
+    ]
+
+
+def _render_retirement_tax_route(tax, non_taxable: int, years: int) -> None:
+    """CSS-only hover formula panel; keyboard focus and touchscreen tap supported."""
+    rows = _retirement_tax_steps(tax, non_taxable, years)
+    html_rows = []
+    for title, amount, formula, substitution, note in rows:
+        formula_html = escape(formula)
+        substitution_html = escape(substitution)
+        note_html = escape(note)
+        tooltip = escape(f'{formula} | {substitution}', quote=True)
+        html_rows.append(
+            f'<tr class="hv-calc-row" tabindex="0" title="{tooltip}">'
+            '<td>'
+            f'<span class="hv-calc-label">{escape(title)}</span>'
+            '<span class="hv-calc-help" tabindex="0" aria-label="계산식 보기">ⓘ</span>'
+            '<div class="hv-calc-steps">'
+            f'<div class="hv-calc-formula">계산식: {formula_html}</div>'
+            f'<div class="hv-calc-numbers">대입: {substitution_html}</div>'
+            f'<div class="hv-calc-note">{note_html}</div>'
+            '</div></td>'
+            f'<td class="hv-calc-amount">{amount:,}원</td>'
+            '</tr>'
+        )
+    st.markdown(
+        '<div class="hv-calc-intro">각 계산 항목에 마우스를 올리면 산식과 숫자 대입 과정이 표시됩니다. '
+        '모바일에서는 <b>ⓘ</b>를 터치하세요.</div>'
+        '<div class="hv-calc-scroll"><table class="hv-calc-table">'
+        '<thead><tr><th>계산 항목</th><th>금액(원)</th></tr></thead>'
+        '<tbody>' + ''.join(html_rows) + '</tbody></table></div>',
+        unsafe_allow_html=True,
+    )
 
 # ===== First-visit password gate (same APP_PASSWORD secret as HanaV Trading) =====
 def _app_password_from_secrets() -> str | None:
@@ -371,11 +529,7 @@ _kpis([
     _won_kpi('일시금 수령 시 추정 합계세금', ret_tax.total_tax),
 ], green_last=True)
 with st.expander('퇴직소득세 계산 경로 펼치기'):
-    st.dataframe(pd.DataFrame([
-        ['퇴직급여 총액',ret_tax.gross],['근속연수공제',ret_tax.service_deduction],
-        ['환산급여',ret_tax.converted_pay],['환산급여공제',ret_tax.converted_pay_deduction],
-        ['환산과세표준',ret_tax.converted_tax_base],['퇴직소득세',ret_tax.income_tax],
-        ['지방소득세',ret_tax.local_income_tax]], columns=['계산 항목','금액(원)']), hide_index=True)
+    _render_retirement_tax_route(ret_tax, int(non_taxable), int(years))
 
 st.subheader('② IRP 연금수령한도·연차 확인')
 col_a,col_b,col_c = st.columns(3)
