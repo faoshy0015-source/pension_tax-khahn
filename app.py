@@ -4,6 +4,7 @@ from decimal import Decimal
 from html import escape
 import hashlib
 import hmac
+import math
 import pandas as pd
 import streamlit as st
 from retirement_core import (
@@ -555,6 +556,368 @@ def _render_withdrawal_route(title: str, treatment: str, result, *,
             unsafe_allow_html=True)
         st.caption('⌊ ⌋ 기호는 원 미만 절사를 뜻합니다. 분류는 재원별 법정 인출순서를 반영했습니다.')
 
+
+# ===== BA II PLUS-style standalone financial / annuity calculator =====
+# TVM math is intentionally self-contained: only app.py is needed on GitHub.
+def _tvm_period_rate(annual_percent: float, payments_per_year: int,
+                     compounds_per_year: int) -> float:
+    """Nominal annual I/Y (%) -> effective rate for each PAYMENT period."""
+    py, cy = int(payments_per_year), int(compounds_per_year)
+    if py <= 0 or cy <= 0:
+        raise ValueError('P/Y와 C/Y는 모두 1 이상이어야 합니다.')
+    nominal_compound_rate = float(annual_percent) / (100.0 * cy)
+    if nominal_compound_rate <= -1:
+        raise ValueError('이율이 복리 회차당 -100% 이하입니다.')
+    return math.expm1(math.log1p(nominal_compound_rate) * cy / py)
+
+
+def _tvm_annuity_factor(rate: float, periods: float, beginning: bool) -> float:
+    """Growth of a level-payment annuity for fractional n too (TI TVM model)."""
+    if periods < 0 or periods > 1200:
+        raise ValueError('N은 0부터 1,200회 사이에서 계산합니다.')
+    if rate <= -1:
+        raise ValueError('회차 이자율은 -100%를 초과해야 합니다.')
+    a = periods if abs(rate) < 1e-12 else math.expm1(periods * math.log1p(rate)) / rate
+    return a * (1.0 + rate if beginning else 1.0)
+
+
+def _tvm_fv(pv: float, pmt: float, rate: float, periods: float,
+            beginning: bool) -> float:
+    growth = math.exp(periods * math.log1p(rate))
+    result = -float(pv) * growth - float(pmt) * _tvm_annuity_factor(rate, periods, beginning)
+    if not math.isfinite(result):
+        raise ValueError('계산 결과가 표현 가능한 범위를 넘었습니다. N 또는 이율을 줄여 주세요.')
+    return result
+
+
+def _tvm_residual(rate: float, n: float, pv: float, pmt: float,
+                  fv: float, beginning: bool) -> float:
+    return _tvm_fv(pv, pmt, rate, n, beginning) - fv
+
+
+def _tvm_solve_unknown(key: str, *, n: float, iy: float, pv: float,
+                       pmt: float, fv: float, py: int = 1, cy: int = 1,
+                       beginning: bool = False) -> tuple[float, str]:
+    """Solve CPT [N/I-Y/PV/PMT/FV], with cashflow sign convention.
+
+    PV negative means the customer's initial investment is money OUT;
+    FV positive means the eventual money received IN.
+    """
+    if not all(math.isfinite(float(v)) for v in (n, iy, pv, pmt, fv)):
+        raise ValueError('입력값은 유한한 숫자여야 합니다.')
+    if key != 'N' and not (0 <= n <= 1200):
+        raise ValueError('N은 0~1,200 사이여야 합니다.')
+    if key != 'I/Y' and (iy < -99 or iy > 1000):
+        raise ValueError('I/Y는 -99%~1,000% 범위에서 입력해 주세요.')
+    if key != 'I/Y':
+        r = _tvm_period_rate(iy, py, cy)
+    else:
+        r = None
+    if key == 'FV':
+        ans = _tvm_fv(pv, pmt, r, n, beginning)
+    elif key == 'PV':
+        growth = math.exp(n * math.log1p(r))
+        ans = -(fv + pmt * _tvm_annuity_factor(r, n, beginning)) / growth
+    elif key == 'PMT':
+        factor = _tvm_annuity_factor(r, n, beginning)
+        if abs(factor) <= 1e-14:
+            raise ValueError('N이 0회이므로 PMT를 계산할 수 없습니다.')
+        growth = math.exp(n * math.log1p(r))
+        ans = -(fv + pv * growth) / factor
+    elif key == 'N':
+        if abs(r) < 1e-12:
+            if abs(pmt) < 1e-12:
+                raise ValueError('이율과 PMT가 0인 경우에는 N을 결정할 수 없습니다.')
+            ans = -(pv + fv) / pmt
+        else:
+            coeff = pmt * (1 + r if beginning else 1) / r
+            denom = pv + coeff
+            if abs(denom) < 1e-12:
+                raise ValueError('지급 흐름상 N을 하나의 값으로 결정할 수 없습니다.')
+            ratio = (coeff - fv) / denom
+            if ratio <= 0:
+                raise ValueError('현재 PV·PMT·FV 조합은 양의 기간으로 성립하지 않습니다.')
+            ans = math.log(ratio) / math.log1p(r)
+        if not (0 <= ans <= 1200):
+            raise ValueError('계산된 N이 0~1,200회 범위를 벗어났습니다. 현금흐름 부호를 확인하세요.')
+    elif key == 'I/Y':
+        if abs(pv) < 1e-12 and abs(pmt) < 1e-12 and abs(fv) < 1e-12:
+            raise ValueError('모든 현금흐름이 0원이면 이율을 결정할 수 없습니다.')
+        if not (0 < n <= 1200):
+            raise ValueError('I/Y를 구하려면 N은 0보다 커야 합니다.')
+        # Find all sign-changing intervals on a -99% to 1000% annual-nominal
+        # grid; prefer the solution near zero if more than one mathematical root.
+        candidates = [-99.0 + i * 0.5 for i in range(199)]  # -99~0
+        candidates += [i * .25 for i in range(1, 801)]  # .25~200
+        candidates += [200.0 + i * 2.0 for i in range(1, 401)]  # 202~1000
+        roots = []
+        prior_point, prior_value = None, None
+        for x in candidates:
+            try:
+                rr = _tvm_period_rate(x, py, cy)
+                value = _tvm_residual(rr, n, pv, pmt, fv, beginning)
+                if not math.isfinite(value):
+                    continue
+            except (OverflowError, ValueError):
+                continue
+            if abs(value) <= 1e-8 * max(1.0, abs(fv), abs(pv), abs(pmt)):
+                roots.append(x)
+            elif prior_value is not None and value * prior_value < 0:
+                lo, hi, f_lo = prior_point, x, prior_value
+                for _ in range(85):
+                    mid = (lo + hi) / 2
+                    try:
+                        f_mid = _tvm_residual(_tvm_period_rate(mid, py, cy),
+                                              n, pv, pmt, fv, beginning)
+                    except (OverflowError, ValueError):
+                        break
+                    if f_mid == 0 or abs(hi - lo) < 1e-12:
+                        lo = hi = mid
+                        break
+                    if (f_mid > 0) == (f_lo > 0):
+                        lo, f_lo = mid, f_mid
+                    else:
+                        hi = mid
+                roots.append((lo + hi) / 2)
+            prior_point, prior_value = x, value
+        roots = sorted(set(round(x, 10) for x in roots))
+        if not roots:
+            raise ValueError('이 현금흐름에서는 -99%~1,000% 구간에 이율 해가 없습니다. PV·PMT·FV의 +/- 부호와 N을 확인하세요.')
+        ans = min(roots, key=lambda v: abs(v))
+        if len(roots) > 1:
+            return ans, f'주의: 이율 해가 {len(roots)}개 발견되었습니다. 절댓값이 가장 작은 이율을 표시합니다. 다른 해: {roots}'
+    else:
+        raise ValueError('알 수 없는 CPT 항목입니다.')
+    if not math.isfinite(ans):
+        raise ValueError('계산 결과가 유한하지 않습니다.')
+    explanation = f'P/Y={py}, C/Y={cy}, 납입시점={"BGN" if beginning else "END"}'
+    return ans, explanation
+
+
+def _tvm_money(value: float) -> str:
+    return f'{value:,.0f}원'
+
+
+def _tvm_clear_registers() -> None:
+    # 2ND + CLR TVM must preserve P/Y, C/Y, and BGN/END, per the TI manual.
+    for k in ('N', 'IY', 'PV', 'PMT', 'FV'):
+        st.session_state['hv_tvm_' + k] = 0.0
+    st.session_state['hv_tvm_result'] = None
+
+
+def _tvm_portfolio_projection(initial: int, monthly_net: int, years: int,
+                               annual_return: float, annual_fee: float) -> tuple[float, list[float]]:
+    """Approximate annualized effective return net of fee, with monthly cashflows."""
+    if annual_return - annual_fee <= -100:
+        raise ValueError('보수 차감 후 수익률은 -100%를 초과해야 합니다.')
+    net_annual = (annual_return - annual_fee) / 100.0
+    monthly_rate = math.expm1(math.log1p(net_annual) / 12)
+    sequence = [float(initial)]
+    for y in range(1, years + 1):
+        # Compare at end-of-month contributions / withdrawals.
+        sequence.append(_tvm_fv(-initial, -monthly_net, monthly_rate, y * 12, False))
+    return sequence[-1], sequence
+
+
+def _tvm_draw_page() -> None:
+    st.markdown("""<style>
+    .hv-tvm-hero{background:linear-gradient(110deg,#132E3C,#0B1C2A);
+      border:1px solid #3F716E;border-left:5px solid #48E4AD;border-radius:14px;
+      padding:18px 20px;margin-bottom:18px}
+    .hv-tvm-hero h3{margin:0 0 6px!important;color:#FFFFFF;font-size:1.3rem}
+    .hv-tvm-hero p{color:#CEDFE7;font-size:.93rem;margin:0}
+    .hv-tvm-key{color:#B6EBD8;font-weight:800;letter-spacing:.08em}
+    .hv-tvm-output{background:#143646;border:1px solid #69DAB8;
+      border-radius:12px;padding:16px;margin:13px 0}
+    .hv-tvm-output .caption{color:#C6E9E0;font-size:.84rem}
+    .hv-tvm-output .value{color:#7FFFD2;font-size:clamp(1.6rem,3vw,2.5rem);
+      font-weight:850;overflow-wrap:anywhere}
+    .st-key-hv_tvm_go button{background:#078C6E!important;
+      border-color:#7FFFD2!important;font-size:1.03rem!important;
+      padding:12px!important}
+    </style>""", unsafe_allow_html=True)
+    st.markdown("""<div class="hv-tvm-hero"><h3>연금상품 금융계산기 · CPT</h3>
+      <p>BA II Plus 방식의 화폐 시간가치(TVM) 계산과 은행·증권사 운용 시나리오 비교</p></div>""",
+      unsafe_allow_html=True)
+    tab_calculator, tab_compare = st.tabs(['🧮 CPT · N / I/Y / PV / PMT / FV', '📈 은행 vs 증권 · 운용 비교'])
+    with tab_calculator:
+        st.markdown('#### 금융계산기 — 계산할 키 선택 후 CPT')
+        st.caption('연 단위 납입은 P/Y=1, 월 단위 납입은 P/Y=12. 이자 복리회수(C/Y)와 지급시점(END/BGN)도 설정합니다.')
+        for name, default in {
+            'N': 15.0, 'IY': 10.0, 'PV': -63_570_000.0,
+            'PMT': -9_000_000.0, 'FV': 0.0,
+        }.items():
+            st.session_state.setdefault('hv_tvm_'+name, default)
+        st.session_state.setdefault('hv_tvm_py', 1)
+        st.session_state.setdefault('hv_tvm_cy', 1)
+        st.session_state.setdefault('hv_tvm_when', 'END')
+        st.session_state.setdefault('hv_tvm_2nd_open', False)
+        st.session_state.setdefault('hv_tvm_result', None)
+
+        button_settings, button_clear, status = st.columns([1.05, 1.3, 1.8])
+        with button_settings:
+            if st.button('2ND · 설정 열기/닫기', use_container_width=True, key='hv_tvm_second'):
+                st.session_state['hv_tvm_2nd_open'] = not st.session_state['hv_tvm_2nd_open']
+        with button_clear:
+            st.button('2ND → CLR TVM', use_container_width=True,
+                      key='hv_tvm_clear', on_click=_tvm_clear_registers)
+        with status:
+            st.caption(f'P/Y {st.session_state["hv_tvm_py"]}  ·  C/Y {st.session_state["hv_tvm_cy"]}  ·  {st.session_state["hv_tvm_when"]}')
+
+        if st.session_state['hv_tvm_2nd_open']:
+            with st.container(border=True):
+                st.markdown('**2ND 추가 설정 · 연금현가/미래가치 계산에 적용**')
+                setting1, setting2, setting3 = st.columns(3)
+                with setting1:
+                    st.selectbox('P/Y · 연간 납입 횟수', [1, 2, 4, 12, 52, 365], key='hv_tvm_py')
+                with setting2:
+                    st.selectbox('C/Y · 연간 복리 횟수', [1, 2, 4, 12, 52, 365], key='hv_tvm_cy')
+                with setting3:
+                    st.radio('납입 시점', ['END','BGN'], key='hv_tvm_when', horizontal=True,
+                             help='END: 매 회차 말 납입 / BGN: 매 회차 초 납입')
+        target = st.radio('**CPT · 계산할 미지수 선택**',
+                          ['FV', 'PV', 'PMT', 'N', 'I/Y'],
+                          horizontal=True, key='hv_tvm_target',
+                          help='선택한 값은 입력하지 않아도 됩니다. 다른 네 값을 사용해 계산합니다.')
+        with st.form('hv_tvm_form', border=True):
+            left, middle, right = st.columns(3)
+            with left:
+                n = st.number_input('N · 총 납입/수령 횟수', step=1.0, format='%.4f',
+                                    key='hv_tvm_N', disabled=target == 'N',
+                                    help='연수 자체가 아니라 지급 횟수입니다. 매월 10년이면 N=120')
+                iy = st.number_input('I/Y · 연이율 (%)', step=0.1, format='%.5f',
+                                     key='hv_tvm_IY', disabled=target == 'I/Y',
+                                     help='예: 5%면 5 입력. P/Y와 C/Y 설정을 별도로 확인하세요.')
+            with middle:
+                pv = st.number_input('PV · 현재가치 (원)', step=1_000_000.0, format='%.0f',
+                                     key='hv_tvm_PV', disabled=target == 'PV')
+                pmt = st.number_input('PMT · 회차별 수령/납입액 (원)', step=100_000.0,
+                                      format='%.0f', key='hv_tvm_PMT', disabled=target == 'PMT')
+            with right:
+                fv = st.number_input('FV · 미래가치 (원)', step=1_000_000.0, format='%.0f',
+                                     key='hv_tvm_FV', disabled=target == 'FV')
+                st.caption('**현금흐름 부호**: 고객이 납입하는 금액은 음수(−), 나중에 받는 금액은 양수(+).')
+                st.caption('상환·연금 인출을 계산할 때는 돈이 들어오는 방향과 나가는 방향을 반대로 넣습니다.')
+            submitted = st.form_submit_button('CPT ▶ 선택한 값 계산',
+                                              type='primary', use_container_width=True)
+        if submitted:
+            try:
+                val, note = _tvm_solve_unknown(target, n=n, iy=iy, pv=pv,
+                    pmt=pmt, fv=fv, py=st.session_state['hv_tvm_py'],
+                    cy=st.session_state['hv_tvm_cy'],
+                    beginning=st.session_state['hv_tvm_when'] == 'BGN')
+                st.session_state['hv_tvm_result'] = (target, val, note)
+            except (ValueError, ZeroDivisionError, OverflowError) as exc:
+                st.session_state['hv_tvm_result'] = None
+                st.error(str(exc))
+        if st.session_state.get('hv_tvm_result') is not None:
+            solved, value, explanation = st.session_state['hv_tvm_result']
+            formatted = (f'{value:,.6f}%' if solved == 'I/Y' else
+                         f'{value:,.4f}회 (약 {value/st.session_state["hv_tvm_py"]:,.2f}년)'
+                         if solved == 'N' else _tvm_money(value))
+            st.markdown(
+                '<div class="hv-tvm-output"><div class="caption">CPT ▶ '+escape(solved)+'</div>'
+                '<div class="value">'+escape(formatted)+'</div></div>', unsafe_allow_html=True)
+            st.caption(explanation)
+            if st.button('계산 결과를 ' + solved + ' 레지스터에 저장',
+                         key='hv_tvm_store', use_container_width=True,
+                         help='BA II Plus처럼 계산 결과를 해당 키에 저장합니다. 이후 다른 키를 CPT로 다시 구할 때 활용할 수 있습니다.'):
+                field = 'IY' if solved == 'I/Y' else solved
+                st.session_state['hv_tvm_' + field] = float(value)
+                st.session_state['hv_tvm_result'] = None
+                st.rerun()
+            with st.expander('ⓘ 계산 원리 및 수식 보기'):
+                st.markdown('**현금흐름 현재가치/미래가치 공식**')
+                st.latex(r'0=PV(1+r)^N+PMT\times\frac{(1+r)^N-1}{r}\times\begin{cases}1&\mathrm{END}\\1+r&\mathrm{BGN}\end{cases}+FV')
+                st.markdown('연 지급 횟수 **P/Y**, 연 복리 횟수 **C/Y**일 때 지급 회차별 이율:')
+                st.latex(r'r=\left(1+\frac{I/Y}{100\times C/Y}\right)^{C/Y\,/\,P/Y}-1')
+                st.caption('이율 0%는 연금현가/미래가치의 극한값으로 처리합니다. N 또는 I/Y 역산에는 해가 없거나 여러 개일 수 있습니다.')
+        with st.expander('BA II Plus와 결과가 다를 때 점검할 항목'):
+            st.markdown('**① P/Y** 연간 납입 횟수 · **② C/Y** 복리 횟수 · **③ END/BGN** 회차 말/초 납입 · '
+                        '**④ PV/PMT 부호** · **⑤ N은 연수가 아니라 회차 수** · **⑥ 소수점 표시만 다른지 확인.')
+            st.markdown('[TI 공식 금융계산기 TVM 키 안내](https://education.ti.com/en/customer-support/knowledge-base/financial-calculators/general-information/11254)')
+
+    with tab_compare:
+        st.markdown('#### 은행형 vs 증권사 퇴직연금 운용 비교')
+        st.caption('동일한 원금·기간·납입 방식에 서로 다른 연 수익률·비용 가정만 적용하는 비교입니다. 특정 금융사의 확정 성과를 의미하지 않습니다.')
+        current_case = int(st.session_state.get('hv_tvm_case_principal', 0))
+        st.session_state.setdefault('hv_tvm_initial', current_case if current_case > 0 else 1_088_894_913)
+        if current_case > 0:
+            if st.button('최근 퇴직금 상담의 잔여 IRP 원금 불러오기', key='hv_tvm_from_case'):
+                st.session_state['hv_tvm_initial'] = current_case
+                st.rerun()
+        a, b, c = st.columns(3)
+        with a:
+            principal = int(st.number_input('운용 시작금액 (원)', min_value=0,
+                                            step=10_000_000, format='%d', key='hv_tvm_initial'))
+        with b:
+            duration = int(st.number_input('운용기간 (년)', min_value=1, max_value=40,
+                                           value=10, step=1, key='hv_tvm_duration'))
+        with c:
+            monthly = int(st.number_input('매월 추가납입(+) / 인출(−) (원)',
+                                          step=100_000, value=0, format='%d', key='hv_tvm_monthly'))
+        bank, securities = st.columns(2)
+        with bank:
+            with st.container(border=True):
+                st.markdown('**🏦 은행형 운용 시나리오**')
+                bank_rate = st.number_input('가정 연 수익률 (%) · 은행',
+                    value=3.0, min_value=-50.0, max_value=100.0,
+                    step=0.1, format='%.2f', key='hv_tvm_bank_rate')
+                bank_fee = st.number_input('연 수수료·비용률 (%) · 은행',
+                    value=0.1, min_value=0.0, max_value=30.0, step=0.1,
+                    format='%.2f', key='hv_tvm_bank_fee')
+        with securities:
+            with st.container(border=True):
+                st.markdown('**📈 하나증권 운용 시나리오**')
+                securities_rate = st.number_input('가정 연 수익률 (%) · 증권',
+                    value=5.5, min_value=-50.0, max_value=100.0,
+                    step=0.1, format='%.2f', key='hv_tvm_stock_rate')
+                securities_fee = st.number_input('연 수수료·비용률 (%) · 증권',
+                    value=0.5, min_value=0.0, max_value=30.0, step=0.1,
+                    format='%.2f', key='hv_tvm_stock_fee')
+        try:
+            bank_final, bank_path = _tvm_portfolio_projection(principal, monthly, duration,
+                                                               bank_rate, bank_fee)
+            stock_final, stock_path = _tvm_portfolio_projection(principal, monthly, duration,
+                                                                 securities_rate, securities_fee)
+            if monthly < 0 and (min(bank_path) < -1e-7 or min(stock_path) < -1e-7):
+                st.warning('중도에 운용자금이 소진되는 시나리오입니다. 인출금액 또는 기간을 조정해 주세요. 음수 잔액을 실제 운용금액으로 보아서는 안 됩니다.')
+            bank_net, stock_net = bank_rate-bank_fee, securities_rate-securities_fee
+            difference = stock_final-bank_final
+            gross_contributed = principal + monthly*duration*12
+            _kpis([
+                ('은행형 순수익률 가정', f'{bank_net:.2f}%', f'{bank_rate:.2f}% − {bank_fee:.2f}%p'),
+                ('증권사 순수익률 가정', f'{stock_net:.2f}%', f'{securities_rate:.2f}% − {securities_fee:.2f}%p'),
+                _won_kpi('은행형 예상 미래가치', round(bank_final)),
+                _won_kpi('증권사 예상 미래가치', round(stock_final)),
+            ], green_last=True)
+            if difference > 0:
+                st.success(f'이 **가정**에서 증권사 운용안의 {duration}년 뒤 평가금액이 은행형보다 **{difference:,.0f}원 많습니다**.')
+            elif difference < 0:
+                st.info(f'이 **가정**에서는 은행형 운용안이 증권사 운용안보다 **{abs(difference):,.0f}원 많습니다**.')
+            else:
+                st.info('입력한 가정에서는 두 운용안의 미래가치가 같습니다.')
+            yearly = pd.DataFrame({
+                '경과연도': list(range(duration+1)),
+                '은행형 잔액(원)': [round(x) for x in bank_path],
+                '하나증권 잔액(원)': [round(x) for x in stock_path],
+            })
+            st.line_chart(yearly.set_index('경과연도'))
+            with st.expander('📋 연도별 잔액 및 수익 계산식 보기'):
+                st.dataframe(yearly, hide_index=True, use_container_width=True)
+                st.markdown('**순수익률(단순 가정)** = 연 기대수익률 − 연 수수료·비용률')
+                st.markdown('**월 유효이율** = (1 + 연 순수익률)^(1/12) − 1')
+                st.markdown('**미래가치** = 시작금액 × (1+r)^개월수 + 매월 납입액 × {[(1+r)^개월수−1]/r}')
+                st.caption('납입은 매월 말(END) 기준입니다. 실제 IRP 수수료 체계와 투자상품 보수는 단순 연율 차감 방식과 다를 수 있습니다.')
+            st.download_button('비교 결과 CSV 다운로드', yearly.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='HanaV_퇴직연금_운용비교.csv', mime='text/csv')
+            st.caption('**비교 유의사항:** 수익률·수수료는 사용자가 입력한 가정입니다. 일반예금은 약정금리·예금자보호 조건을 확인하고, '
+                '펀드·ETF·채권 등은 가격변동·원금손실·상품별 투자제한을 고려하세요. 은행 IRP와 증권사 IRP는 동일한 세법상 조건에서 세율 혜택이 같습니다. '
+                '미래가치에는 향후 연금수령세금·인플레이션·세법 변경·실제 운용 제약을 반영하지 않았습니다.')
+        except (ValueError, OverflowError) as exc:
+            st.error(f'운용 비교 계산을 완료할 수 없습니다: {exc}')
+
+
 # ===== First-visit password gate (same APP_PASSWORD secret as HanaV Trading) =====
 def _app_password_from_secrets() -> str | None:
     """Fail closed if the deployment has no valid secret configured."""
@@ -665,6 +1028,14 @@ with st.sidebar:
 
 st.title('HanaV Pension Tax Lab')
 st.caption('2026년 세법 기반 퇴직소득세·IRP 연금수령 비교 | 내부 상담용 시뮬레이터 (실제 원천징수 확정세액 아님)')
+with st.sidebar:
+    choice = st.radio('업무 메뉴', ['퇴직·연금 유치 상담', '🧮 금융계산기 · CPT / 운용비교'],
+                      key='hv_main_menu', label_visibility='visible')
+    st.divider()
+if choice.startswith('🧮'):
+    _tvm_draw_page()
+    st.stop()
+
 
 # Streamlit session_state keys make values update immediately when the left
 # sidebar retirement payment changes. Ledger balance/valuation may differ from
@@ -1000,6 +1371,7 @@ with st.container(border=True):
                 gross_cash, original_retirement, ret_tax.income_tax, annual_limit, int(compare_year), 1)
             full_lump = int(ret_tax.total_tax)
             deferral_remaining_principal = original_retirement-gross_cash
+            st.session_state['hv_tvm_case_principal'] = int(deferral_remaining_principal)
             # Remaining tax is an estimate based on deferred-income basis consumption, not 'savings'.
             all_lump_draw_tax = draw.hypothetical_all_lump_tax
             saving_per_draw = draw.saving_vs_all_lump
