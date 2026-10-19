@@ -283,6 +283,45 @@ st.markdown('''<style>
   margin-top:7px;overflow-wrap:anywhere}
 .hv-tax-result-detail{color:#BED2DF;line-height:1.65;font-size:.81rem;margin-top:5px}
 @media(max-width:650px){.hv-tax-two-col{grid-template-columns:1fr}}
+
+/* Automatically-linked ledger balances and highlighted customer withdrawal. */
+.hv-linked-hint{
+  color:#8AEBC7;font-size:.79rem;font-weight:730;
+  letter-spacing:-.01em;margin:0 0 .22rem;
+}
+.hv-customer-withdrawal-label{
+  font-size:.99rem;font-weight:850;color:#FFE29D;
+  letter-spacing:-.015em;margin:0 0 7px;
+}
+.hv-customer-withdrawal-hint{color:#F4DCA4;font-size:.78rem;margin:8px 0 0}
+/* Streamlit container(key=...) emits the st-key- class. Scope the amber palette
+   to this one input so every other number field retains its Hana-green theme. */
+.st-key-hv_withdrawal_highlight{
+  background:#2B2D29!important;
+  border:1.5px solid #E9B760!important;
+  border-left:5px solid #F9C86E!important;
+  border-radius:12px!important;
+  padding:12px 13px 10px!important;
+  margin-top:7px!important;
+}
+.st-key-hv_withdrawal_highlight [data-testid="stNumberInput"] [data-baseweb="input"],
+.st-key-hv_withdrawal_highlight [data-testid="stNumberInput"] [data-baseweb="input"] > div{
+  background:#493B29!important;border-color:#F4CD7E!important;
+}
+.st-key-hv_withdrawal_highlight [data-testid="stNumberInput"] input{
+  background:#493B29!important;
+  color:#FFF5DA!important;
+  -webkit-text-fill-color:#FFF5DA!important;
+  font-weight:850!important;
+  font-size:1.13rem!important;
+  caret-color:#FFF5DA!important;
+}
+.st-key-hv_withdrawal_highlight [data-testid="stNumberInput"] button{
+  background:#986A1D!important;border-color:#F5C66B!important;
+}
+.st-key-hv_withdrawal_highlight [data-testid="stNumberInput"] button:hover{
+  background:#B6832A!important;
+}
 </style>''', unsafe_allow_html=True)
 
 
@@ -627,6 +666,40 @@ with st.sidebar:
 st.title('HanaV Pension Tax Lab')
 st.caption('2026년 세법 기반 퇴직소득세·IRP 연금수령 비교 | 내부 상담용 시뮬레이터 (실제 원천징수 확정세액 아님)')
 
+# Streamlit session_state keys make values update immediately when the left
+# sidebar retirement payment changes. Ledger balance/valuation may differ from
+# original severance: both automatic links can be individually disabled.
+_DEFAULT_GROSS = 100_000_000
+for _state_key, _initial in {
+    'hv_gross_retirement': _DEFAULT_GROSS,
+    'hv_non_taxable_retirement': 0,
+    'hv_def_balance': _DEFAULT_GROSS,
+    'hv_excluded_balance': 0,
+    'hv_taxable_balance': 0,
+    'hv_evaluated_balance': _DEFAULT_GROSS,
+    'hv_auto_def_balance': True,
+    'hv_auto_evaluated_balance': True,
+}.items():
+    if _state_key not in st.session_state:
+        st.session_state[_state_key] = _initial
+
+
+def _sync_evaluated_from_balances():
+    if st.session_state.get('hv_auto_evaluated_balance', True):
+        st.session_state['hv_evaluated_balance'] = sum(
+            int(st.session_state.get(name, 0))
+            for name in ('hv_def_balance', 'hv_excluded_balance', 'hv_taxable_balance')
+        )
+
+
+def _sync_from_retirement_payment():
+    if st.session_state.get('hv_auto_def_balance', True):
+        gross = int(st.session_state.get('hv_gross_retirement', 0))
+        nontax = int(st.session_state.get('hv_non_taxable_retirement', 0))
+        st.session_state['hv_def_balance'] = max(0, gross - nontax)
+    _sync_evaluated_from_balances()
+
+
 with st.sidebar:
     st.subheader('고객·퇴직연금 정보')
     birth = st.date_input('생년월일', value=date(1966, 6, 1), min_value=date(1920,1,1), max_value=date(2010,12,31))
@@ -657,8 +730,15 @@ with st.sidebar:
     except ValueError: computed_years = None
     years = int(st.number_input('세법상 근속연수(년)', min_value=1, max_value=80, value=computed_years or 20,
                                 disabled=not manual_years)) if manual_years else computed_years
-    gross_retirement = st.number_input('퇴직급여 총액(원)', min_value=0, value=100_000_000, step=1_000_000, format='%d')
-    non_taxable = st.number_input('비과세 퇴직소득(원)', min_value=0, value=0, step=100_000)
+    gross_retirement = st.number_input(
+        '퇴직급여 총액(원)', min_value=0, step=1_000_000, format='%d',
+        key='hv_gross_retirement', on_change=_sync_from_retirement_payment,
+        help='퇴직급여를 변경하면 자동 연동 중인 이연퇴직소득 잔액과 한도산정용 평가액도 변경됩니다.',
+    )
+    non_taxable = st.number_input(
+        '비과세 퇴직소득(원)', min_value=0, step=100_000,
+        key='hv_non_taxable_retirement', on_change=_sync_from_retirement_payment,
+    )
     st.caption(f'입력 퇴직급여: {gross_retirement:,}원 · 비과세: {non_taxable:,}원')
 
 if years is None:
@@ -687,16 +767,51 @@ with col_a:
     planned_date = st.date_input('연금개시/수령예정일', value=date(2026,10,19),
                                  min_value=date(2026,1,1), max_value=date(2050,12,31))
 with col_b:
-    def_balance = st.number_input('현재 이연퇴직소득 재원 잔액(원)', min_value=0, value=100_000_000, step=1_000_000)
-    excluded = st.number_input('과세제외 재원 잔액(원)', min_value=0, value=0, step=1_000_000)
-    taxable = st.number_input('세액공제 납입액·운용수익 잔액(원)', min_value=0, value=0, step=1_000_000)
+    st.checkbox('퇴직급여와 잔액 자동 연동', key='hv_auto_def_balance',
+                on_change=_sync_from_retirement_payment,
+                help='기본적으로 퇴직급여 총액에서 비과세 퇴직소득을 제외한 금액이 자동 반영됩니다. '
+                     '기인출·계좌이체 등으로 현재 잔액이 다르면 체크를 해제해 직접 입력하세요.')
+    def_balance = st.number_input(
+        '현재 이연퇴직소득 재원 잔액(원)', min_value=0, step=1_000_000,
+        key='hv_def_balance', disabled=st.session_state['hv_auto_def_balance'],
+        on_change=_sync_evaluated_from_balances,
+        help='퇴직금 원금 중 아직 인출하지 않은 이연퇴직소득 잔액입니다. 자동 연동 해제 시 직접 조정할 수 있습니다.',
+    )
+    if st.session_state['hv_auto_def_balance']:
+        st.markdown('<div class="hv-linked-hint">↳ 왼쪽 퇴직급여 입력과 연동 중</div>', unsafe_allow_html=True)
+    excluded = st.number_input(
+        '과세제외 재원 잔액(원)', min_value=0, step=1_000_000,
+        key='hv_excluded_balance', on_change=_sync_evaluated_from_balances,
+    )
+    taxable = st.number_input(
+        '세액공제 납입액·운용수익 잔액(원)', min_value=0, step=1_000_000,
+        key='hv_taxable_balance', on_change=_sync_evaluated_from_balances,
+    )
 with col_c:
-    evaluated = st.number_input('해당 연도 한도산정용 평가액(원)', min_value=0, value=100_000_000, step=1_000_000,
-                                help='연금개시 신청연도는 신청시점 평가액, 그 이후는 1월 1일 기준. 현재 잔액과 다를 수 있음.')
+    st.checkbox('재원별 잔액과 평가액 자동 연동', key='hv_auto_evaluated_balance',
+                on_change=_sync_evaluated_from_balances,
+                help='기본적으로 이연퇴직소득·과세제외·세액공제 납입액/수익 잔액을 합산합니다. '
+                     '연금수령한도 계산의 기준일 평가액이 현재 잔액과 다르면 체크를 해제해 정확한 평가액을 입력하세요.')
+    evaluated = st.number_input(
+        '해당 연도 한도산정용 평가액(원)', min_value=0, step=1_000_000,
+        key='hv_evaluated_balance', disabled=st.session_state['hv_auto_evaluated_balance'],
+        help='한도산정용 평가액은 현재 인출 전 잔액과 다를 수 있습니다. '
+             '최초 수령일 및 이후 과세연도의 적용 기준일은 금융기관 자료로 확인하세요.',
+    )
+    if st.session_state['hv_auto_evaluated_balance']:
+        st.markdown('<div class="hv-linked-hint">↳ 재원별 잔액 합계 자동 반영</div>', unsafe_allow_html=True)
     withdrawn_ytd = st.number_input('해당 연도 이미 수령한 금액(원)', min_value=0, value=0, step=1_000_000,
                                     help='본 프로토타입은 이전 수령분 모두 한도를 소진했다고 가정합니다.')
-    new_withdrawal = st.number_input('이번 수령신청금액(원)', min_value=0, value=50_000_000, step=1_000_000,
-                                     help='이번에 새로 신청하는 금액을 입력합니다. 이미 올해 받은 금액은 바로 위 항목에 별도로 입력합니다.')
+    with st.container(key='hv_withdrawal_highlight'):
+        st.markdown('<div class="hv-customer-withdrawal-label">✦ 이번 수령신청금액(원)</div>',
+                    unsafe_allow_html=True)
+        new_withdrawal = st.number_input(
+            '이번 수령신청금액(원)', min_value=0, value=50_000_000,
+            step=1_000_000, label_visibility='collapsed',
+            help='이번에 새로 신청하는 금액입니다. 기존 수령분과 구분해 입력하세요.',
+        )
+        st.markdown('<div class="hv-customer-withdrawal-hint">수령신청액을 입력하면 아래에서 한도 내·초과 세액을 자동 계산합니다.</div>',
+                    unsafe_allow_html=True)
 
 # Current account type IRP can still carry qualifying *prior DB* history.
 # retirement_core.legacy_eligible only understands a DB current-plan flag,
