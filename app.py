@@ -9,7 +9,7 @@ import streamlit as st
 from retirement_core import (
     age_on, actual_receipt_year_from_history, calculate_withdrawal, estimate_retirement_tax, first_eligible_date,
     legacy_eligible, pension_limit, service_years, floor_krw,
-    converted_pay_deduction, income_tax_on_base,
+    converted_pay_deduction, income_tax_on_base, retirement_tax_multiplier, age_pension_tax_rate,
 )
 
 st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout='wide')
@@ -251,6 +251,38 @@ st.markdown('''<style>
  .hv-calc-table th:last-child{min-width:102px}
  .hv-calc-steps{font-size:.78rem;padding:9px}
 }
+
+/* Breakdown for individual pension / non-pension withdrawal tax routes. */
+.hv-tax-summary{
+  margin:4px 0 16px;padding:15px 18px;background:#132A3A;
+  border:1px solid #467488;border-left:4px solid #48E4AD;
+  border-radius:11px;line-height:1.8;color:#F4FCFF;
+}
+.hv-tax-summary strong{color:#83F6CF}
+.hv-tax-steps{
+  background:#132939;border:1px solid #3E6979;
+  border-radius:10px;overflow:hidden;margin:10px 0 15px;
+}
+.hv-tax-step{
+  padding:14px 16px;border-bottom:1px solid #355667;color:#EFF9FD;
+}
+.hv-tax-step:last-child{border-bottom:0}
+.hv-tax-step-title{color:#77F4C8;font-weight:800;line-height:1.45;overflow-wrap:anywhere}
+.hv-tax-step-formula{color:#FFFFFF;line-height:1.75;font-size:.90rem;
+  margin-top:8px;overflow-wrap:anywhere;word-break:keep-all}
+.hv-tax-step-foot{color:#BFD8E5;margin-top:6px;font-size:.85rem;
+  line-height:1.6;overflow-wrap:anywhere}
+.hv-tax-two-col{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0 20px
+}
+.hv-tax-result{background:#172B3A;border:1px solid #416073;
+  border-top:3px solid #48E4AD;border-radius:11px;padding:14px 16px}
+.hv-tax-result--excess{border-top-color:#F2BC73}
+.hv-tax-result-name{color:#DCEEF7;font-weight:750;font-size:.9rem;line-height:1.6}
+.hv-tax-result-value{color:#FFFFFF;font-size:1.3rem;font-weight:850;
+  margin-top:7px;overflow-wrap:anywhere}
+.hv-tax-result-detail{color:#BED2DF;line-height:1.65;font-size:.81rem;margin-top:5px}
+@media(max-width:650px){.hv-tax-two-col{grid-template-columns:1fr}}
 </style>''', unsafe_allow_html=True)
 
 
@@ -411,6 +443,78 @@ def _render_retirement_tax_route(tax, non_taxable: int, years: int) -> None:
         '<tbody>' + ''.join(html_rows) + '</tbody></table></div>',
         unsafe_allow_html=True,
     )
+
+
+
+def _detail_formula_for_withdrawal_row(row, *, deferred_tax: int, def_balance: int,
+                                      age: int, receipt_year: int, calendar_year: int) -> tuple[str, str]:
+    """Expose the same Decimal arithmetic and won flooring as retirement_core.
+
+    Returns (tax formula, result and local-tax formula) for each existing result row.
+    No independent tax calculation is used to replace the engine output.
+    """
+    amount = int(row.gross)
+    pension = row.treatment == '연금수령'
+    if row.resource == '과세제외금액':
+        formula = '과세제외 재원: 소득세 0원 (비과세)'
+        substitution = f'{amount:,}원 × 0% = 0원'
+    elif row.resource == '이연퇴직소득':
+        factor = retirement_tax_multiplier(receipt_year, calendar_year) if pension else Decimal('1')
+        factor_percent = factor * 100
+        if pension:
+            formula = ('국세 = ⌊수령액 × (잔여 이연퇴직소득세 ÷ 잔여 이연퇴직소득 원금)'
+                       f' × {factor_percent:,.0f}%⌋')
+        else:
+            formula = '국세 = ⌊수령액 × (잔여 이연퇴직소득세 ÷ 잔여 이연퇴직소득 원금) × 100%⌋'
+        substitution = (f'⌊{amount:,}원 × ({deferred_tax:,}원 ÷ {def_balance:,}원)'
+                        f' × {factor_percent:,.0f}%⌋ = {row.income_tax:,}원')
+    else:
+        personal_percent = (age_pension_tax_rate(age) * 100) if pension else Decimal('15')
+        desc = '연령별 연금소득세' if pension else '연금외수령 기타소득세'
+        formula = f'국세 = ⌊수령액 × {personal_percent:,.0f}%⌋ ({desc})'
+        substitution = f'⌊{amount:,}원 × {personal_percent:,.0f}%⌋ = {row.income_tax:,}원'
+    local_text = (f'지방소득세: ⌊국세 {row.income_tax:,}원 × 10%⌋ = {row.local_income_tax:,}원'
+                  f' | 합계 {row.total_tax:,}원 | 실수령 {row.net:,}원')
+    return formula, substitution + ' | ' + local_text
+
+
+def _render_withdrawal_route(title: str, treatment: str, result, *,
+                             deferred_tax: int, def_balance: int, age: int,
+                             receipt_year: int, calendar_year: int) -> None:
+    """One-click breakdown of the taxes for every withdrawal source in the category."""
+    matching = [r for r in result.rows if r.treatment == treatment]
+    total_amount = sum(r.gross for r in matching)
+    total_income = sum(r.income_tax for r in matching)
+    total_local = sum(r.local_income_tax for r in matching)
+    total_tax = total_income + total_local
+    total_net = total_amount - total_tax
+    label = (f'{title} — {total_amount:,}원 | 세금 {total_tax:,}원 | 계산식 펼치기')
+    with st.expander(label, expanded=False):
+        if not matching:
+            st.info('이번 신청금액 중 해당 분류로 인출되는 금액은 없습니다.')
+            return
+        html_rows = []
+        for idx, row in enumerate(matching, 1):
+            formula, applied = _detail_formula_for_withdrawal_row(
+                row, deferred_tax=deferred_tax, def_balance=def_balance,
+                age=age, receipt_year=receipt_year, calendar_year=calendar_year)
+            html_rows.append(
+                '<div class="hv-tax-step">'
+                f'<div class="hv-tax-step-title">{idx}. {escape(row.resource)} · {row.gross:,}원</div>'
+                f'<div class="hv-tax-step-formula">{escape(formula)}</div>'
+                f'<div class="hv-tax-step-formula">숫자 대입: {escape(applied)}</div>'
+                '</div>'
+            )
+        st.markdown('<div class="hv-tax-steps">' + ''.join(html_rows) + '</div>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="hv-tax-summary"><b>소득세(국세)</b> {total_income:,}원 '
+            f'+ <b>지방소득세</b> {total_local:,}원 = '
+            f'<strong>세금 합계 {total_tax:,}원</strong><br>'
+            f'수령액 {total_amount:,}원 − 세금 {total_tax:,}원 = '
+            f'<strong>실수령액 {total_net:,}원</strong></div>',
+            unsafe_allow_html=True)
+        st.caption('⌊ ⌋ 기호는 원 미만 절사를 뜻합니다. 분류는 재원별 법정 인출순서를 반영했습니다.')
 
 # ===== First-visit password gate (same APP_PASSWORD secret as HanaV Trading) =====
 def _app_password_from_secrets() -> str | None:
@@ -591,7 +695,8 @@ with col_c:
                                 help='연금개시 신청연도는 신청시점 평가액, 그 이후는 1월 1일 기준. 현재 잔액과 다를 수 있음.')
     withdrawn_ytd = st.number_input('해당 연도 이미 수령한 금액(원)', min_value=0, value=0, step=1_000_000,
                                     help='본 프로토타입은 이전 수령분 모두 한도를 소진했다고 가정합니다.')
-    new_withdrawal = st.number_input('이번/남은 연도 수령 계획액(원)', min_value=0, value=50_000_000, step=1_000_000)
+    new_withdrawal = st.number_input('이번 수령신청금액(원)', min_value=0, value=50_000_000, step=1_000_000,
+                                     help='이번에 새로 신청하는 금액을 입력합니다. 이미 올해 받은 금액은 바로 위 항목에 별도로 입력합니다.')
 
 # Current account type IRP can still carry qualifying *prior DB* history.
 # retirement_core.legacy_eligible only understands a DB current-plan flag,
@@ -676,34 +781,127 @@ else:
     deferred_tax = ret_tax.income_tax
 
 if new_withdrawal > excluded+def_balance+taxable:
-    st.error('이번 수령 계획액이 현재 재원별 잔액 합계보다 큽니다.')
+    st.error('이번 수령신청금액이 현재 재원별 잔액 합계보다 큽니다.')
     st.stop()
 if evaluated != excluded+def_balance+taxable:
     st.caption('한도 산정 평가액과 인출 직전 재원별 잔액은 기준일이 달라 서로 다를 수 있습니다. 확인 후 사용하세요.')
+# 11년차 이후는 법정 연간한도 제한이 없으므로, 평가액이나 당해
+# 기수령액 때문에 적격 연금 인출액이 연금외수령으로 오분류되지 않도록 합니다.
+current_available = int(excluded + def_balance + taxable)
+if eligible_now and count is not None and count >= 11:
+    effective_limit = int(withdrawn_ytd) + current_available
+    limit_remaining = current_available
+else:
+    effective_limit = int(limit)
+    limit_remaining = max(0, effective_limit - int(withdrawn_ytd)) if eligible_now else 0
+
 result = calculate_withdrawal(
-    amount=int(new_withdrawal), prior_year_withdrawals=int(withdrawn_ytd), statutory_limit=int(limit),
+    amount=int(new_withdrawal), prior_year_withdrawals=int(withdrawn_ytd), statutory_limit=effective_limit,
     excluded_balance=int(excluded), retirement_balance=int(def_balance), taxable_balance=int(taxable),
     remaining_deferred_income_tax=int(deferred_tax), actual_receipt_year=int(actual_year),
     age=age_on(birth, planned_date), calendar_year=int(year), qualifies=eligible_now)
 
-st.subheader('④ 수령금액별 과세 결과')
+st.subheader('④ 수령신청금액별 세금 계산 — 한도 내 vs 초과')
+if count is not None and count >= 11 and eligible_now:
+    how_limit = '연금수령연차 11년차 이상으로 법정 한도 제한 없음'
+else:
+    how_limit = (f'올해 연금수령한도 {limit:,}원 − 기수령액 {withdrawn_ytd:,}원'
+                 f' = 남은 한도 {limit_remaining:,}원')
+st.markdown(
+    '<div class="hv-tax-summary">'
+    f'<b>수령신청금액</b> {new_withdrawal:,}원 · '
+    f'<b>한도 내 인정금액</b> {result.pension_amount:,}원 · '
+    f'<b>한도 초과/연금외수령</b> {result.nonpension_amount:,}원<br>'
+    f'{escape(how_limit)}'
+    '</div>', unsafe_allow_html=True)
+if eligible_now and count is not None and count >= 11:
+    separation_formula = (f'**한도 내 인정액:** 법정 연간 한도 없음 → 신청액 {new_withdrawal:,}원 전액 연금수령 인정 가능'
+                          f'\n\n**한도 초과액:** 0원')
+elif eligible_now:
+    separation_formula = (
+        f'**한도 내 인정액:** MIN(이번 신청액, MAX(연간 한도 − 기수령액, 0))'
+        f' = MIN({new_withdrawal:,}원, MAX({limit:,}원 − {withdrawn_ytd:,}원, 0))'
+        f' = **{result.pension_amount:,}원**'
+        f'\n\n**한도 초과액:** 신청액 − 한도 내 인정액'
+        f' = {new_withdrawal:,}원 − {result.pension_amount:,}원'
+        f' = **{result.nonpension_amount:,}원**'
+    )
+else:
+    separation_formula = (
+        '**연금수령 요건 미충족:** 이번 신청액은 연금외수령으로 분류합니다.'
+        f'\n\n**한도 내 인정액:** 0원'
+        f'\n\n**연금외수령액:** {new_withdrawal:,}원'
+    )
+with st.expander('ⓘ 한도 내·초과 금액 분리 계산식 보기'):
+    st.markdown(separation_formula)
+    st.caption('한도 계산은 수령 예정일의 연금수령 요건 충족 및 해당 연도 기수령액을 반영합니다.')
+
 _kpis([
-    _won_kpi('연금수령 인정금액', result.pension_amount),
-    _won_kpi('연금외수령 금액', result.nonpension_amount),
-    _won_kpi('이번 수령 예상 세금(지방세 포함)', result.total_tax),
-    _won_kpi('이번 수령 세후 실수령액', result.total_net),
+    _won_kpi('이번 수령신청금액', int(new_withdrawal)),
+    _won_kpi('한도 내 연금수령 인정액', result.pension_amount),
+    _won_kpi('한도 초과·연금외수령액', result.nonpension_amount),
+    _won_kpi('세후 실수령액', result.total_net),
 ], green_last=True)
+
+pension_rows = [r for r in result.rows if r.treatment == '연금수령']
+nonpension_rows = [r for r in result.rows if r.treatment == '연금외수령']
+pension_tax = sum(r.total_tax for r in pension_rows)
+nonpension_tax = sum(r.total_tax for r in nonpension_rows)
+pension_net = sum(r.net for r in pension_rows)
+nonpension_net = sum(r.net for r in nonpension_rows)
+
+st.markdown(
+    '<div class="hv-tax-two-col">'
+    '<div class="hv-tax-result">'
+    '<div class="hv-tax-result-name">① 한도 내 · 연금수령 인정액</div>'
+    f'<div class="hv-tax-result-value">{result.pension_amount:,}원</div>'
+    f'<div class="hv-tax-result-detail">예상 세금 <strong>{pension_tax:,}원</strong><br>'
+    f'세후 수령액 {pension_net:,}원</div></div>'
+    '<div class="hv-tax-result hv-tax-result--excess">'
+    '<div class="hv-tax-result-name">② 한도 초과 · 연금외수령액</div>'
+    f'<div class="hv-tax-result-value">{result.nonpension_amount:,}원</div>'
+    f'<div class="hv-tax-result-detail">예상 세금 <strong>{nonpension_tax:,}원</strong><br>'
+    f'세후 수령액 {nonpension_net:,}원</div></div></div>',
+    unsafe_allow_html=True,
+)
+st.markdown('**각 구분을 클릭하면 소득세·지방소득세의 계산식을 금액 대입과 함께 확인할 수 있습니다.**')
+_render_withdrawal_route('① 한도 내 연금수령 계산식', '연금수령', result,
+                         deferred_tax=int(deferred_tax), def_balance=int(def_balance),
+                         age=age_on(birth, planned_date), receipt_year=int(actual_year),
+                         calendar_year=int(year))
+_render_withdrawal_route('② 한도 초과·연금외수령 계산식', '연금외수령', result,
+                         deferred_tax=int(deferred_tax), def_balance=int(def_balance),
+                         age=age_on(birth, planned_date), receipt_year=int(actual_year),
+                         calendar_year=int(year))
+
+st.markdown(
+    '<div class="hv-tax-summary">'
+    f'<b>이번 수령 총세금</b> = 한도 내 {pension_tax:,}원 + 초과분 {nonpension_tax:,}원'
+    f' = <strong>{result.total_tax:,}원</strong><br>'
+    f'<b>최종 실수령액</b> = 신청액 {new_withdrawal:,}원 − 총세금 {result.total_tax:,}원'
+    f' = <strong>{result.total_net:,}원</strong>'
+    '</div>', unsafe_allow_html=True)
+
+st.caption('세율 판단 기준: 이연퇴직소득은 잔여 이연퇴직소득세/잔여 원금 × (연금수령 70·60·50% / 연금외수령 100%). '
+           '세액공제 납입금·운용수익은 적격 연금수령 시 연령별 국세 3~5%, 연금외수령 시 국세 15%; '
+           '지방소득세는 국세의 10%로 별도 계산합니다. 과세제외 재원은 비과세입니다.')
+st.caption('※ 연금수령한도는 올해 남은 한도만 고려합니다. 연간 과거 수령액 입력은 기수령분이 모두 한도를 소진한 것으로 가정합니다. '
+           '퇴직소득세 분모·분자는 해당 계좌의 원천징수 자료에 맞춰 확인해 주세요.')
 
 output = pd.DataFrame([{
     '재원': r.resource, '인출 분류':r.treatment, '수령금액(원)':r.gross,
     '국세 적용세율(%)':r.income_tax_rate_percent,'소득세(원)':r.income_tax,
     '지방소득세(원)':r.local_income_tax,'합계세금(원)':r.total_tax, '실수령액(원)':r.net,
 } for r in result.rows])
+with st.expander('재원별 과세 명세표 펼치기'):
+    if not output.empty:
+        st.dataframe(output, use_container_width=True, hide_index=True)
+    else:
+        st.info('수령신청금액을 입력하면 재원별 과세 명세가 표시됩니다.')
 if not output.empty:
-    st.dataframe(output, use_container_width=True, hide_index=True)
     st.download_button('수령 세율별 결과 CSV 다운로드', output.to_csv(index=False).encode('utf-8-sig'),
                        file_name=f'연금세액비교_{year}.csv', mime='text/csv')
-_kpis([_won_kpi('동일 금액 전액 연금외수령 가정 대비 추정 절세액', result.saving_vs_all_lump)], green_last=True)
+_kpis([_won_kpi('전액 연금외수령 가정 대비 추정 절세액', result.saving_vs_all_lump)], green_last=True)
 st.caption(f'비교기준: 전액 연금외수령시 약 {result.hypothetical_all_lump_tax:,}원 vs 현재 계획 {result.total_tax:,}원. 자산운용수익·물가·세법변경 미반영.')
 
 st.divider()
