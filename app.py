@@ -1794,6 +1794,57 @@ with st.container(border=True):
                 _won_kpi('이번 인출 세금', draw.total_tax),
                 _won_kpi('이번 인출분 예상 세율감면 효과', saving_per_draw),
             ], green_last=True)
+            st.markdown(
+                f'**세율감면 효과 계산:** 동일한 세전 인출액 **{gross_cash:,}원**을 '
+                f'모두 연금외수령한다고 가정할 때의 세금 **{all_lump_draw_tax:,}원** '
+                f'− 이번 계획의 세금 **{draw.total_tax:,}원** '
+                f'= **{saving_per_draw:,}원**'
+            )
+            with st.expander('ⓘ 이번 인출분 예상 세율감면 효과 · 상세 계산 근거'):
+                # 이 사례는 단일 이연퇴직소득 재원이며 실제 연금수령 1년차를 가정함.
+                pension_rows = [r for r in draw.rows if r.treatment == '연금수령']
+                nonpension_rows = [r for r in draw.rows if r.treatment == '연금외수령']
+                pension_tax = sum(r.total_tax for r in pension_rows)
+                nonpension_tax = sum(r.total_tax for r in nonpension_rows)
+                pension_if_lump_tax = all_lump_draw_tax - nonpension_tax
+                pension_multiplier = retirement_tax_multiplier(1, int(compare_year))
+                base_rate_pct = (
+                    ret_tax.income_tax / original_retirement * 100
+                    if original_retirement > 0 else 0.0
+                )
+                st.markdown(
+                    f'**① 세금 비교의 기준** · 세전 인출액 **{gross_cash:,}원**을 동일하게 놓고 '
+                    '전액 연금외수령과 현재의 연금수령/연금외수령 혼합 방식을 비교합니다. '
+                    f'퇴직금 전체에 대한 일시금 세금 **{full_lump:,}원**과 비교하는 것은 아닙니다.'
+                )
+                st.markdown(
+                    f'**② 금액별 적용 방식** · 연금수령한도 내 **{draw.pension_amount:,}원**은 '
+                    f'이연퇴직소득 국세 기본세율 **약 {base_rate_pct:.4f}%**의 '
+                    f'**{pension_multiplier * 100:.0f}%**를 적용하고, '
+                    f'한도 초과 **{draw.nonpension_amount:,}원**은 기본세율 100%를 적용합니다. '
+                    '각 금액의 국세 계산 후 지방소득세 10%를 더하며 원 단위 절사에 따른 차이가 생길 수 있습니다.'
+                )
+                st.markdown(
+                    f'**③ 한도 내 부분 세금 비교** · 한도 내 금액을 모두 연금외수령했다면 '
+                    f'**{pension_if_lump_tax:,}원**, 연금수령 적용 세금은 '
+                    f'**{pension_tax:,}원** → 차이 **{pension_if_lump_tax-pension_tax:,}원**'
+                )
+                st.markdown(
+                    f'**④ 한도 초과 부분의 세금** · 연금외수령 적용 세금 '
+                    f'**{nonpension_tax:,}원** (두 비교안에서 동일)'
+                )
+                st.markdown(
+                    f'**⑤ 최종 계산** · '
+                    f'(**{pension_if_lump_tax:,}원** + **{nonpension_tax:,}원**) '
+                    f'− (**{pension_tax:,}원** + **{nonpension_tax:,}원**) '
+                    f'= **{saving_per_draw:,}원**'
+                )
+                st.caption(
+                    '해당 금액은 동일한 세전 인출액을 전액 연금외수령한 가정에 비해 '
+                    '이번 인출 시 덜 내는 세금입니다. 별도 환급액이 아니며, '
+                    'IRP에 남은 퇴직소득에 대한 향후 과세이연 금액도 포함하지 않습니다. '
+                    '실제 원천징수세액은 이연퇴직소득세 원장·연금수령연차 및 인출내역을 확인해야 합니다.'
+                )
             st.markdown('##### ② 연금수령한도 내·초과 금액과 세율')
             f1, f2 = st.columns(2)
             with f1:
