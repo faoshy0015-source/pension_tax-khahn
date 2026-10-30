@@ -1711,6 +1711,21 @@ with st.container(border=True):
             st.markdown(f'**퇴직 후 신규 IRP 가정:** {compare_year}년 **{limit_year}년차**, '
                         f'연금수령한도 **{_short_krw(annual_limit)}** · 예상 퇴직소득세 '
                         f'**{_short_krw(full_lump)}** (국세+지방세)')
+            if sales_legacy:
+                st.caption(
+                    f'📌 **연금수령연차 기산 근거:** 2013.3.1 이전 DB 가입 및 퇴직소득 전액 신규 IRP 이체 '
+                    f'특례를 가정합니다. 이 신규 IRP에서 최초 연금수령 가능한 해인 '
+                    f'**{first_year}년을 6년차**로 기산하여, {compare_year}년은 '
+                    f'**6 + ({compare_year} − {first_year}) = {limit_year}년차**입니다. '
+                    f'만 55세 도달연도({birth.year + 55}년)부터 자동 합산하지 않습니다. '
+                    '이미 연금수령 요건을 갖춘 기존 연금계좌의 연차가 별도로 승계되는 경우에는 '
+                    '금융기관 원장의 기산연도를 확인해야 합니다.'
+                )
+            else:
+                st.caption(
+                    f'📌 **연금수령연차 기산 근거:** 이 계좌의 최초 연금수령 가능연도 '
+                    f'{first_year}년을 1년차로 계산하여, {compare_year}년은 {limit_year}년차입니다.'
+                )
             _kpis([
                 _won_kpi('결혼자금 세전 인출액', gross_cash),
                 _won_kpi('결혼자금 세후 실수령액', cash_for_wedding),
