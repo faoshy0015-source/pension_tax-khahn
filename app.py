@@ -1102,11 +1102,22 @@ def _proposal_draw_page() -> None:
     cx1, cx2, cx3 = st.columns(3)
     with cx1:
         customer = st.text_input('고객 구분명 (선택·실명 입력 지양)', key='hv_prop_customer')
-        gross = int(st.number_input('퇴직급여 총액 · 참고(원)', min_value=0, step=10_000_000, key='hv_prop_gross'))
-        cash = int(st.number_input('우선 확보 현금 · 참고(원)', min_value=0, step=10_000_000, key='hv_prop_cash'))
+        gross = int(st.number_input(
+            '퇴직급여 총액(원)', min_value=0, step=10_000_000,
+            key='hv_prop_gross', on_change=_proposal_sync_principal_from_funding
+        ))
+        cash = int(st.number_input(
+            'IRP 이전 전 제외할 현금액(원, 세전 가정)', min_value=0, step=10_000_000,
+            key='hv_prop_cash', on_change=_proposal_sync_principal_from_funding,
+            help='IRP로 이체하지 않을 세전 퇴직급여 부분입니다. 세후 현금 필요액이라면 자동 연동을 해제하고 실제 IRP 입금원금을 입력하세요.'
+        ))
     with cx2:
-        principal = int(st.number_input('비교할 IRP 운용 시작원금(원)', min_value=0, step=10_000_000,
-                                         format='%d', key='hv_prop_principal'))
+        principal = int(st.number_input(
+            '비교할 IRP 운용 시작원금(원)', min_value=0, step=10_000_000,
+            format='%d', key='hv_prop_principal',
+            disabled=bool(st.session_state.get('hv_prop_auto_principal', True) and gross > 0),
+            help='자동 연동 중에는 퇴직급여 − 제외할 현금이 반영됩니다. 직접 수정하려면 자동 연동을 해제하세요.'
+        ))
         years = int(st.number_input('운용기간(년)', min_value=1, max_value=40, value=10, step=1, key='hv_prop_years'))
         monthly = int(st.number_input('매월 추가납입(+) / 인출(−)(원)', step=100_000,
                                       format='%d', key='hv_prop_monthly'))
