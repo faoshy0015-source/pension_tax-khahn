@@ -1036,11 +1036,21 @@ header{border-bottom:3px solid #00816b;padding:8px 0 13px;display:flex;justify-c
     return html.encode('utf-8-sig')
 
 
+def _proposal_sync_principal_from_funding() -> None:
+    """세전 퇴직급여에서 IRP 이전 전 차감액을 뺀 비교용 시작원금."""
+    if not st.session_state.get('hv_prop_auto_principal', True):
+        return
+    gross = max(0, int(st.session_state.get('hv_prop_gross', 0)))
+    cash = max(0, int(st.session_state.get('hv_prop_cash', 0)))
+    st.session_state['hv_prop_principal'] = max(0, gross - cash)
+
+
 def _proposal_load_sample() -> None:
     st.session_state.update({
         'hv_prop_gross': 1_700_000_000,
         'hv_prop_cash': 500_000_000,
         'hv_prop_principal': 1_088_894_913,
+        'hv_prop_auto_principal': False,  # 세후 사례 원금은 수동 입력
         'hv_prop_savings': 70_000_000,
         'hv_prop_other_irp': 40_000_000,
         'hv_prop_customer': '고액 퇴직금 상담 예시',
@@ -1070,6 +1080,7 @@ def _proposal_draw_page() -> None:
             if st.button(f'현재 퇴직세금 상담의 잔여 운용원금 {_proposal_won(current_case)} 불러오기',
                          use_container_width=True, key='hv_prop_fetch'):
                 st.session_state['hv_prop_principal'] = int(current_case)
+                st.session_state['hv_prop_auto_principal'] = False
                 st.rerun()
     st.markdown('#### ① 상담 대상 및 자금 계획')
     for k, default in {
@@ -1078,6 +1089,16 @@ def _proposal_draw_page() -> None:
         'hv_prop_savings': 0, 'hv_prop_other_irp': 0,
     }.items():
         st.session_state.setdefault(k, default)
+    if 'hv_prop_auto_principal' not in st.session_state:
+        st.session_state['hv_prop_auto_principal'] = True
+        if int(st.session_state.get('hv_prop_gross', 0)) > 0:
+            _proposal_sync_principal_from_funding()
+    st.checkbox(
+        '퇴직급여에서 사전 현금확보액을 차감해 IRP 시작원금 자동 계산',
+        key='hv_prop_auto_principal',
+        on_change=_proposal_sync_principal_from_funding,
+        help='세전 단순 차감입니다. 실제 IRP 입금액이 다르거나 세후 현금이 필요한 경우 해제해 직접 입력하세요.'
+    )
     cx1, cx2, cx3 = st.columns(3)
     with cx1:
         customer = st.text_input('고객 구분명 (선택·실명 입력 지양)', key='hv_prop_customer')
