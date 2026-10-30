@@ -1128,7 +1128,27 @@ def _proposal_draw_page() -> None:
                                       step=1_000_000, key='hv_prop_savings'))
         other_irp = int(st.number_input('별도 기존 IRP(원) · 합산 제외', min_value=0,
                                         step=1_000_000, key='hv_prop_other_irp'))
-    st.info('**입력 유의:** 실습사례의 잔여 운용원금은 앞선 상담의 단순 시뮬레이션값이며 확정 잔액이 아닙니다. 비교 시작원금은 실제 운용 예정 IRP 잔액을 입력하세요. 퇴직급여·결혼자금·별도 기존 계좌는 설명용 참고값으로, 시작원금에 자동 합산하지 않습니다. 시작원금이 이연퇴직소득이라면 향후 인출세액은 별도입니다.')
+    if gross > 0 and cash > gross:
+        st.error('IRP 이전 전 제외할 현금액은 퇴직급여 총액을 초과할 수 없습니다.')
+        return
+    if gross > 0 and st.session_state.get('hv_prop_auto_principal', True):
+        st.success(
+            f'📌 **IRP 시작원금 자동 반영:** 퇴직급여 {_short_krw(gross)}'
+            f' − IRP 이전 전 제외 현금 {_short_krw(cash)}'
+            f' = **{_short_krw(principal)} ({principal:,}원)**'
+        )
+    elif gross > 0:
+        st.info(
+            f'📌 **직접 입력 모드:** 총 퇴직급여 {_short_krw(gross)}와 구분하여 '
+            f'실제 운용 시작원금 **{_short_krw(principal)}**을 비교표에 적용합니다.'
+        )
+    else:
+        st.caption('퇴직급여 총액 미입력: 현재 시작원금은 예시값입니다. 총액을 입력하면 자동 연동이 시작됩니다.')
+    st.caption(
+        '주의: 자동 연동은 **세전 단순 차감**이며 퇴직소득세·세후 인출액을 역산하지 않습니다. '
+        '실제 IRP 입금액이 다르면 자동 연동을 해제하여 직접 수정하세요. '
+        '기존 연금저축과 기존 IRP 자산은 이 원금에 합산하지 않습니다.'
+    )
     st.markdown('#### ② 은행 IRP vs 하나증권 IRP · 실제 제안 상품 기준')
     ba, ha = st.columns(2)
     with ba:
