@@ -1608,9 +1608,12 @@ with st.container(border=True):
         _won_kpi('결혼자금 목표 · 퇴직금에서 인출', int(st.session_state.get('hv_advice_cash', 500_000_000))),
     ])
     st.caption(
-        '✅ 사례 금액 구분: 퇴직금 17억원은 이번 신규 유치 대상이고, 기존 연금저축 7천만원과 '
-        '기존 H은행 IRP 4천만원은 별도 보유 자산입니다. 이 둘은 17억원에 더하지 않습니다. '
-        '결혼자금 5억원을 세후로 받으려면 세금 때문에 실제 인출원금은 5억원보다 커질 수 있습니다.'
+        f'✅ 자금 구분: 이번 퇴직급여 **{_short_krw(int(gross_retirement))}** · '
+        f'별도 기존 연금저축 **{_short_krw(int(st.session_state.get("hv_advice_old_savings", 70_000_000)))}** · '
+        f'별도 기존 H은행 IRP **{_short_krw(int(st.session_state.get("hv_advice_bank_irp", 40_000_000)))}**. '
+        '기존 계좌는 퇴직금에 합산하지 않습니다. '
+        f'결혼자금 목표 **{_short_krw(int(st.session_state.get("hv_advice_cash", 500_000_000)))}**을 '
+        '세후 기준으로 마련할 경우 실제 인출원금은 목표액보다 클 수 있습니다.'
     )
     sleft, sright = st.columns([1.04, 1])
     with sleft:
