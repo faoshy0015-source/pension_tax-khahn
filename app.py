@@ -1194,9 +1194,19 @@ def _proposal_draw_page() -> None:
         _won_kpi(f'하나증권 IRP {years}년 후 평가액', hana_final),
     ], green_last=diff>0)
     if diff > 0:
-        st.success(f'같은 현금흐름과 가정하에서 하나증권 예상 평가액이 **{_proposal_won(diff)} 더 높습니다.** 확정수익이나 세제 혜택 차이는 아닙니다.')
+        st.success(
+            f'**{years}년 후 평가액 차이: {_short_krw(diff)}** '
+            f'(정확히 **{_proposal_won(diff)}**) · '
+            f'하나증권 {hana_final:,}원 − 은행 {bank_final:,}원. '
+            '동일한 현금흐름과 가정에 따른 차이이며, 확정수익이나 세제 혜택 차이는 아닙니다.'
+        )
     elif diff < 0:
-        st.info(f'현재 가정에서는 은행 IRP의 예상 평가액이 **{_proposal_won(-diff)} 더 높습니다.**')
+        st.info(
+            f'**{years}년 후 평가액 차이: 은행 IRP가 {_short_krw(-diff)} 더 높음** '
+            f'(정확히 **{_proposal_won(-diff)}**) · '
+            f'은행 {bank_final:,}원 − 하나증권 {hana_final:,}원. '
+            '현재 입력된 수익률·비용과 현금흐름에 따른 가정입니다.'
+        )
     else:
         st.info('현재 입력 조건에서는 두 IRP의 예상 평가액이 같습니다.')
     path_rows = [{'경과연도': year,
