@@ -998,11 +998,18 @@ header{border-bottom:3px solid #00816b;padding:8px 0 13px;display:flex;justify-c
 <tr><td>검토 상품/전략</td><td>@BANKPRODUCT@</td><td>@HANAPRODUCT@</td></tr>
 <tr><td>연 가정수익률</td><td>@BANKGROSS@%</td><td>@HANAGROSS@%</td></tr>
 <tr><td>연 총비용 가정</td><td>@BANKFEE@%</td><td>@HANAFEE@%</td></tr>
+<tr><td>은행 IRP 입력 근거</td><td colspan="2">@BANKFEESOURCE@ / 확인일: @BANKFEEDATE@</td></tr>
 <tr><td>단순 차감 순수익률 가정</td><td>@BANKNET@%</td><td>@HANANET@%</td></tr>
 <tr><td>@YEARS@년 후 세전 예상 평가액</td><td>@BANKFINAL@</td><td>@HANAFINAL@</td></tr>
 <tr><td>시장 악화 가정 시 평가액</td><td>@BANKSTRESS@</td><td>@HANASTRESS@</td></tr>
 <tr><td>원금보장 여부</td><td>@BANKGUAR@</td><td>@HANAGUAR@</td></tr>
 </tbody></table>
+<p class="small"><b>수수료 비교공시 확인:</b>
+<a href="https://100lifeplan.fss.or.kr/" target="_blank" rel="noopener noreferrer">금융감독원 통합연금포털</a> /
+<a href="https://fine.fss.or.kr/" target="_blank" rel="noopener noreferrer">금융감독원 파인(FINE)</a>.
+위 수수료는 입력자가 설정한 비교 가정으로 자동 검증된 공식 수수료가 아닙니다.
+제도유형·부담금 유형·대면/비대면 개설·적립금 구간 및 면제·할인 조건에 따라 실제 적용률이 달라질 수 있습니다.
+펀드 보수·상품별 비용을 포함한 총비용을 별도로 확인해야 합니다.</p>
 <div class="cards"><div class="card"><span>은행 IRP 평가액(기본)</span><strong>@BANKFINAL@</strong></div>
 <div class="card"><span>하나증권 IRP 평가액(기본)</span><strong>@HANAFINAL@</strong></div>
 <div class="card"><span>평가액 차이 (하나증권−은행)</span><strong>@DIFF@</strong></div></div>
@@ -1023,6 +1030,8 @@ header{border-bottom:3px solid #00816b;padding:8px 0 13px;display:flex;justify-c
         '@BANKPRODUCT@': data['bank_product'], '@HANAPRODUCT@': data['hana_product'],
         '@BANKGROSS@': f"{data['bank_rate']:.2f}", '@HANAGROSS@': f"{data['hana_rate']:.2f}",
         '@BANKFEE@': f"{data['bank_fee']:.2f}", '@HANAFEE@': f"{data['hana_fee']:.2f}",
+        '@BANKFEESOURCE@': data.get('bank_fee_source', '사용자 입력 · 공시 미확인'),
+        '@BANKFEEDATE@': data.get('bank_fee_date') or '미기재',
         '@BANKNET@': f"{data['bank_rate']-data['bank_fee']:.2f}",
         '@HANANET@': f"{data['hana_rate']-data['hana_fee']:.2f}",
         '@BANKFINAL@': _proposal_won(bank_end), '@HANAFINAL@': _proposal_won(hana_end),
@@ -1158,7 +1167,27 @@ def _proposal_draw_page() -> None:
             bank_rate = st.number_input('은행 연 기대/약정수익률 가정(%)', min_value=-50.0, max_value=200.0,
                                         value=3.0, step=0.1, key='hv_prop_bank_rate')
             bank_fee = st.number_input('은행 연간 총비용률 가정(%)', min_value=0.0, max_value=20.0,
-                                       value=0.0, step=0.05, key='hv_prop_bank_fee')
+                                       value=0.0, step=0.05, key='hv_prop_bank_fee',
+                                       help='직접 입력한 비교용 가정입니다. 금융감독원 비교공시 또는 계약 금융회사 공시로 확인하세요.')
+            bank_fee_source = st.selectbox(
+                '은행 IRP 수수료율 입력 근거',
+                [
+                    '직접 입력한 비교 가정 · 공식 공시 미확인',
+                    '금융감독원 통합연금포털 비교공시를 직접 확인',
+                    '해당 은행 공식 수수료표·약관을 직접 확인',
+                ],
+                key='hv_prop_bank_fee_source',
+                help='선택만으로 공식 자료가 자동 검증되지는 않습니다. 실제 확인한 경우에만 해당 항목을 선택하세요.'
+            )
+            bank_fee_checked_at = st.text_input(
+                '수수료 확인 기준일(선택 · YYYY-MM-DD)',
+                key='hv_prop_bank_fee_date', placeholder='예: 2026-10-30',
+                help='공시를 실제 확인한 날짜만 입력하세요. 미확인 시 빈칸으로 두세요.'
+            ).strip()
+            st.link_button('🔎 금감원 통합연금포털 · 수수료 비교공시 확인',
+                           'https://100lifeplan.fss.or.kr/', use_container_width=True)
+            st.caption('금융감독원 [파인(FINE)](https://fine.fss.or.kr/)에서도 금융소비자 정보를 확인할 수 있습니다. '
+                       'IRP·대면/비대면·퇴직금/개인부담금·적립금 구간에 따라 수수료가 달라질 수 있습니다.')
             bank_stress = st.number_input('은행 시장악화 시 연 수익률 가정(%)', min_value=-95.0, max_value=100.0,
                                          value=1.0, step=0.5, key='hv_prop_bank_stress')
             bank_guaranteed = st.checkbox('비교상품을 원리금보장형으로 가정', value=True, key='hv_prop_bank_guaranteed')
@@ -1174,6 +1203,13 @@ def _proposal_draw_page() -> None:
             hana_stress = st.number_input('하나증권 시장악화 시 연 수익률 가정(%)', min_value=-95.0, max_value=100.0,
                                          value=-10.0, step=0.5, key='hv_prop_hana_stress')
             hana_guaranteed = st.checkbox('비교상품을 원리금보장형으로 가정', value=False, key='hv_prop_hana_guaranteed')
+    st.caption(
+        f'**수수료 비교 가정:** 은행 IRP 연 {bank_fee:.2f}% / 하나증권 IRP 연 {hana_fee:.2f}%. '
+        f'은행 입력 근거: {bank_fee_source}'
+        + (f' (확인일: {bank_fee_checked_at})' if bank_fee_checked_at else '')
+        + '. 이는 사용자가 입력한 수치이며 앱이 공시값을 자동 수집·검증한 것은 아닙니다. '
+        '상품별 펀드 보수와 추가 비용, 수수료 면제·할인 여부도 확인하세요.'
+    )
     strategy_risk = st.radio('하나증권 제안안의 위험구성 (설명용)',
         ['원리금보장형 중심', '혼합형', '실적배당형 비중 높음'], horizontal=True, key='hv_prop_mix')
     try:
@@ -1247,6 +1283,7 @@ def _proposal_draw_page() -> None:
         'bank_product': bank_product, 'hana_product': hana_product,
         'bank_rate': bank_rate, 'hana_rate': hana_rate,
         'bank_fee': bank_fee, 'hana_fee': hana_fee,
+        'bank_fee_source': bank_fee_source, 'bank_fee_date': bank_fee_checked_at,
         'bank_guaranteed': bank_guaranteed, 'hana_guaranteed': hana_guaranteed,
         'bank_final': bank_final, 'hana_final': hana_final,
         'bank_stress_final': bank_bad[-1], 'hana_stress_final': hana_bad[-1],
