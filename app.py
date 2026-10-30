@@ -1379,6 +1379,7 @@ def _load_advisory_case() -> None:
         'hv_taxable_balance': 0,
         'hv_legacy_db_full_transfer': False,
         'hv_analysis_year': 2026,
+        'hv_advice_year': 2026,
         'hv_planned_receipt_day': date(2026, 10, 30),
         'hv_new_withdrawal': 500_000_000,
         'hv_advice_old_savings': 70_000_000,
@@ -1394,7 +1395,7 @@ with st.sidebar:
     st.subheader('고객·퇴직연금 정보')
     st.button('🎯 실전사례 불러오기 · 퇴직금 17억원', on_click=_load_advisory_case,
               key='hv_case_load', use_container_width=True,
-              help='생년월일·근속·2015년 DB 가입·퇴직금 17억원과 인출신청금액 5억원을 한번에 반영합니다.')
+              help='퇴직급여 17억원, 기존 연금저축 7천만원·H은행 IRP 4천만원(모두 퇴직금과 별도), 세후 결혼자금 목표 5억원을 불러옵니다.')
     birth = st.date_input('생년월일', value=date(1966, 6, 1), min_value=date(1920,1,1), max_value=date(2010,12,31), key='hv_customer_birth')
     plan_type = st.selectbox('퇴직연금 종류', ['DB', 'DC', 'IRP'], key='hv_plan_type')
     plan_joined = st.date_input('기존 퇴직연금제도 가입일', value=date(2010,1,1), min_value=date(1970,1,1), max_value=date(2026,12,31), key='hv_plan_joined',
@@ -1594,7 +1595,23 @@ def _optimize_combined_funding(net_goal: int, *, old_balance: int,
 st.subheader('🎯 고액 퇴직금 유치 상담 · 은행 예금 / 은행 IRP / 하나증권 IRP')
 st.caption('상담 시나리오별 당장의 세금, 연금계좌에 남는 자금, 금융회사별 운용조건을 분리해 비교합니다.')
 with st.container(border=True):
-    st.markdown('#### 고객 사례 분석 · 5억원 결혼자금 마련 후 잔여자금 운용')
+    st.markdown(
+        f'#### 고객 사례 분석 · {_short_krw(int(st.session_state.get("hv_advice_cash", 500_000_000)))} '
+        '결혼자금 마련 후 잔여자금 운용'
+    )
+    # 왼쪽 사이드바의 17억원 퇴직금을 오른쪽에서도 즉시 확인할 수 있도록 표시.
+    # 기존 연금저축과 기존 H은행 IRP는 신규 퇴직금에 합산하지 않는다.
+    _kpis([
+        _won_kpi('이번 퇴직급여 · 신규 유치 대상', int(gross_retirement)),
+        _won_kpi('기존 연금저축 · 별도 자산', int(st.session_state.get('hv_advice_old_savings', 70_000_000))),
+        _won_kpi('기존 H은행 IRP · 별도 자산', int(st.session_state.get('hv_advice_bank_irp', 40_000_000))),
+        _won_kpi('결혼자금 목표 · 퇴직금에서 인출', int(st.session_state.get('hv_advice_cash', 500_000_000))),
+    ])
+    st.caption(
+        '✅ 사례 금액 구분: 퇴직금 17억원은 이번 신규 유치 대상이고, 기존 연금저축 7천만원과 '
+        '기존 H은행 IRP 4천만원은 별도 보유 자산입니다. 이 둘은 17억원에 더하지 않습니다. '
+        '결혼자금 5억원을 세후로 받으려면 세금 때문에 실제 인출원금은 5억원보다 커질 수 있습니다.'
+    )
     sleft, sright = st.columns([1.04, 1])
     with sleft:
         st.markdown('**다른 금융기관에 보유한 연금계좌 — 퇴직금 17억원과 별도 관리**')
@@ -1607,10 +1624,6 @@ with st.container(border=True):
             '기존 H은행 IRP 평가액(원) · 2021.10.19 가입', min_value=0,
             step=1_000_000, key='hv_advice_bank_irp', value=40_000_000,
             help='기존 H은행 IRP는 신규 퇴직금 유치 IRP와 별도 계좌로 가정합니다. 두 계좌를 합산해 인출하는 경우 재계산해야 합니다.'))
-        _kpis([
-            _won_kpi('기존 연금저축', existing_savings),
-            _won_kpi('H은행 기존 IRP', existing_bank_irp),
-        ])
     with sright:
         st.markdown('**자녀 결혼자금 — 세전·세후 입력을 명확히 선택**')
         mode_wedding = st.radio(
