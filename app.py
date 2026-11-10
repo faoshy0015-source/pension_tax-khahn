@@ -14,6 +14,11 @@ from retirement_core import (
 )
 
 st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout='wide')
+# When EMAIL_ACCESS_MODE=enforced, verify Supabase Auth identity and central
+# approved email grant before the existing APP_PASSWORD / app data access.
+from approved_email_gate import require_approved_email
+require_approved_email(st, "pension-tax", "HanaV Pension Tax Lab")
+
 # The CSS is intentionally embedded in app.py so a GitHub update to this file
 # alone still provides readable colors. .streamlit/config.toml supplies a matching
 # native Streamlit dark theme (including dataframe/editor internals and popovers).
