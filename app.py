@@ -14,6 +14,9 @@ from retirement_core import (
 )
 
 st.set_page_config(page_title='HanaV Pension Tax Lab', page_icon='🧾', layout='wide')
+
+from email_access import require_approved_email
+require_approved_email(st)
 # The CSS is intentionally embedded in app.py so a GitHub update to this file
 # alone still provides readable colors. .streamlit/config.toml supplies a matching
 # native Streamlit dark theme (including dataframe/editor internals and popovers).
